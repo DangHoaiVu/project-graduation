@@ -1,0 +1,296 @@
+import { NextResponse } from 'next/server';
+import { generateText } from '@/models/registry';
+import { getDb } from '@/db';
+import { documents } from '@/db/schema';
+import { eq } from 'drizzle-orm';
+import { parseDocumentFromUrl } from '@/lib/document-parser';
+import { retrieveRelevantChunks, formatChunksForPrompt } from '@/lib/rag';
+
+interface ChatHistoryItem {
+  role: 'user' | 'ai' | 'model' | 'assistant';
+  text: string;
+}
+
+interface SourceItem {
+  name: string;
+  url?: string;
+  type?: string;
+}
+
+interface StudentScoreItem {
+  columnName: string;
+  maxScore: number;
+  score: number | null;
+}
+
+interface StudentItem {
+  id: number | string;
+  fullname: string;
+  username?: string;
+  idnumber?: string;
+  scores?: StudentScoreItem[];
+}
+
+interface StudentSummary {
+  total?: number;
+  names?: string[];
+}
+
+interface GradeColumnSummary {
+  id?: number | string;
+  name: string;
+  grademax: number;
+}
+
+export async function POST(request: Request) {
+  try {
+    const {
+      question = '',
+      course = '',
+      courseCode = '',
+      courseId,
+      sources = [],
+      history = [],
+      model = 'auto',
+      students,
+      gradeColumns = [],
+      gradebookScores = {},
+    } = (await request.json()) as {
+      question?: string;
+      course?: string;
+      courseCode?: string;
+      courseId?: string | number;
+      sources?: SourceItem[];
+      history?: ChatHistoryItem[];
+      model?: string;
+      students?: StudentItem[] | StudentSummary;
+      gradeColumns?: GradeColumnSummary[];
+      gradebookScores?: Record<string, Record<string, number | string>>;
+    };
+
+    if (!question.trim()) {
+      return NextResponse.json({ error: 'Câu hỏi không được để trống.' }, { status: 400 });
+    }
+
+    // 1. Retrieve course documents for RAG grounding
+    let documentContext = '';
+    const db = getDb();
+    const docMap = new Map<string, string>();
+
+    if (db && courseId) {
+      try {
+        const dbDocs = await db
+          .select({ id: documents.id, title: documents.title, content: documents.content })
+          .from(documents)
+          .where(eq(documents.courseId, String(courseId)))
+          .limit(10);
+
+        for (const doc of dbDocs) {
+          if (doc.content && doc.content.length > 50) {
+            docMap.set(doc.title.toLowerCase(), doc.content);
+          }
+        }
+      } catch (dbErr) {
+        console.warn('Could not query documents for teacher assistant:', dbErr);
+      }
+    }
+
+    // Fetch URLs from provided sources
+    for (const src of sources.slice(0, 5)) {
+      const lowerName = src.name.toLowerCase();
+      if (!docMap.has(lowerName) && src.url) {
+        try {
+          const extractedText = await parseDocumentFromUrl(src.url, src.name);
+          if (extractedText && extractedText.trim()) {
+            docMap.set(lowerName, extractedText);
+          }
+        } catch {
+          // non-fatal
+        }
+      }
+    }
+
+    // Compile and do RAG retrieval
+    const compiledDocs: Array<{ title: string; text: string }> = [];
+    for (const [title, text] of docMap.entries()) {
+      if (text.trim() && !compiledDocs.some(d => d.title === title)) {
+        compiledDocs.push({ title, text });
+      }
+    }
+
+    if (compiledDocs.length > 0) {
+      try {
+        const relevantChunks = await retrieveRelevantChunks(question, compiledDocs, {
+          topK: 8,
+          maxTotalChars: 20000,
+          minSimilarity: 0.12,
+        });
+        if (relevantChunks.length > 0) {
+          documentContext = formatChunksForPrompt(relevantChunks);
+        } else {
+          const maxPerDoc = Math.max(3000, Math.floor(25000 / compiledDocs.length));
+          documentContext = compiledDocs
+            .map((doc, idx) => `--- TÀI LIỆU [${idx + 1}]: "${doc.title}" ---\n${doc.text.slice(0, maxPerDoc)}`)
+            .join('\n\n');
+        }
+      } catch {
+        const maxPerDoc = Math.max(3000, Math.floor(25000 / compiledDocs.length));
+        documentContext = compiledDocs
+          .map((doc, idx) => `--- TÀI LIỆU [${idx + 1}]: "${doc.title}" ---\n${doc.text.slice(0, maxPerDoc)}`)
+          .join('\n\n');
+      }
+    }
+
+    // 2. Build gradebook context if available
+    let gradebookContext = '';
+    if (Array.isArray(students) && students.length > 0) {
+      gradebookContext += `\n\n--- KẾT QUẢ SỔ ĐIỂM THỰC TẾ CỦA LỚP HỌC ---\n`;
+      gradebookContext += `- Sĩ số lớp: ${students.length} sinh viên\n`;
+      if (gradeColumns.length > 0) {
+        gradebookContext += `- Các cột điểm kiểm tra:\n`;
+        gradeColumns.forEach((col, i) => {
+          gradebookContext += `  ${i + 1}. "${col.name}" (Điểm tối đa: ${col.grademax}đ)\n`;
+        });
+      }
+
+      gradebookContext += `\n- BẢNG ĐIỂM CHI TIẾT TỪNG SINH VIÊN (DỮ LIỆU THỰC TẾ):\n`;
+      students.forEach(s => {
+        const idInfo = s.idnumber || s.username ? ` [Mã SV: ${s.idnumber || s.username}]` : '';
+        gradebookContext += `  * Sinh viên: **${s.fullname}**${idInfo}\n`;
+        if (Array.isArray(s.scores) && s.scores.length > 0) {
+          s.scores.forEach(sc => {
+            if (sc.score !== null && sc.score !== undefined) {
+              const pct = sc.maxScore > 0 ? ` (${Math.round((sc.score / sc.maxScore) * 100)}%)` : '';
+              gradebookContext += `      - Cột "${sc.columnName}": **${sc.score}** / ${sc.maxScore}đ${pct}\n`;
+            } else {
+              gradebookContext += `      - Cột "${sc.columnName}": Chưa có điểm\n`;
+            }
+          });
+        } else {
+          gradebookContext += `      - Chưa có điểm ghi nhận\n`;
+        }
+      });
+      gradebookContext += `---------------------------------------------------\n`;
+    } else if (students && typeof students === 'object' && 'total' in students && (students.total ?? 0) > 0) {
+      gradebookContext += `\n\nTHÔNG TIN LỚP HỌC:\n- Sĩ số: ${students.total} sinh viên`;
+      if (students.names && students.names.length > 0) {
+        gradebookContext += `\n- Danh sách: ${students.names.slice(0, 30).join(', ')}`;
+      }
+    }
+
+    // 3. Build Teacher-focused System Prompt
+    const subjectName = course || 'môn học hiện tại';
+
+    const systemInstruction = `Bạn là TRỢ LÝ AI CHUYÊN BIỆT CHO GIẢNG VIÊN (Teacher AI Assistant) môn "${subjectName}".
+
+VAI TRÒ & NĂNG LỰC:
+Bạn hỗ trợ Giảng viên với TẤT CẢ các công việc giảng dạy, bao gồm:
+1. GỢI Ý TÀI LIỆU & NGUỒN HỌC LIỆU: Đề xuất sách giáo khoa, bài báo khoa học, video bài giảng, trang web chuyên ngành, bài tập thực hành phù hợp với nội dung môn ${subjectName}. Ưu tiên nguồn tiếng Việt khi có, kèm nguồn quốc tế uy tín.
+2. SOẠN BÀI TẬP VỀ NHÀ (Homework): Tạo bài tập với đề bài rõ ràng, yêu cầu cụ thể, tiêu chí chấm điểm (rubric), và gợi ý thời gian hoàn thành. Phân loại theo mức độ (cơ bản / nâng cao).
+3. LẬP KẾ HOẠCH BÀI GIẢNG (Lesson Plan): Soạn kế hoạch bài giảng chi tiết bao gồm: mục tiêu học tập (Learning Outcomes), nội dung chính, hoạt động trên lớp, phương pháp giảng dạy, thời lượng dự kiến từng phần, và tài liệu tham khảo.
+4. TẠO CÂU HỎI KIỂM TRA & ÔN TẬP: Soạn câu hỏi trắc nghiệm, tự luận, hoặc bài tập tình huống phù hợp với nội dung môn học. Đảm bảo phân bổ theo các mức độ nhận thức Bloom (Nhớ, Hiểu, Vận dụng, Phân tích, Đánh giá, Sáng tạo).
+5. PHÂN TÍCH PHỔ ĐIỂM & HIỆU QUẢ GIẢNG DẠY: Khi có dữ liệu sổ điểm, phân tích chính xác điểm số, xác định sinh viên cần hỗ trợ, đánh giá hiệu quả từng cột điểm.
+6. SOẠN NHẬN XÉT SINH VIÊN: Viết feedback chuyên nghiệp, mang tính xây dựng cho từng sinh viên hoặc nhóm dựa trên kết quả học tập.
+
+QUY TẮC ĐẶC BIỆT KHI PHÂN TÍCH BẢNG ĐIỂM (BẮT BUỘC):
+- Khi trả lời câu hỏi liên quan đến bảng điểm, đánh giá sinh viên, tìm sinh viên cần cải thiện:
+  1. BẮT BUỘC sử dụng CHÍNH XÁC các con số từ phần "KẾT QUẢ SỔ ĐIỂM THỰC TẾ CỦA LỚP HỌC" được cung cấp bên dưới.
+  2. TUYỆT ĐỐI KHÔNG TỰ BỊA, TỰ GIẢ ĐỊNH hoặc đổi số điểm của sinh viên (không được tự nghĩ ra điểm 5, 8, 60, 75,... nếu số liệu thật khác).
+  3. Luôn đối chiếu điểm với điểm tối đa của cột (ví dụ: điểm 6 / 100đ là 6%, điểm 10 / 10đ là 100%) để nhận định chính xác sinh viên nào làm bài tốt ở cột nào và còn yếu ở cột nào.
+
+QUY TẮC PHẠM VI:
+- Tập trung vào môn "${subjectName}" và các chủ đề liên quan trực tiếp.
+- Khi soạn câu hỏi kiểm tra, BẮT BUỘC bám sát nội dung tài liệu môn học được cung cấp bên dưới (nếu có).
+- Sử dụng ngôn ngữ chuyên nghiệp, chuẩn sư phạm đại học.
+
+QUY TẮC ĐỊNH DẠNG:
+1. Trình bày rõ ràng với đề mục, danh sách, bảng biểu Markdown.
+2. TOÁN HỌC: Sử dụng LaTeX chuẩn $công_thức$ (ví dụ: $O(n \\log n)$, $\\sum_{i=1}^{n}$).
+3. BẢNG BIỂU: Dùng thẻ <br/> xuống dòng trong ô bảng Markdown. Không đặt code block bên trong ô bảng.
+4. Khi soạn câu hỏi trắc nghiệm, trình bày rõ đáp án đúng và lời giải thích.`;
+
+    let contextSection = '';
+    if (documentContext.trim()) {
+      contextSection = `\nTÀI LIỆU MÔN HỌC (làm cơ sở nội dung):\n${documentContext}`;
+    } else {
+      contextSection = `\nMÔN HỌC: ${course}\nMã môn: ${courseCode || 'N/A'}`;
+    }
+
+    if (gradebookContext) {
+      contextSection += gradebookContext;
+    }
+
+    const userPrompt = `${contextSection}\n---\nYÊU CẦU CỦA GIẢNG VIÊN: ${question}`;
+
+    // 4. Generate AI response
+    let aiText = '';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let groundingMetadata: any = null;
+
+    try {
+      const result = await generateText(model, {
+        system: systemInstruction,
+        userPrompt,
+        history: history.slice(-8).map(msg => ({
+          role: msg.role === 'user' ? 'user' as const : 'assistant' as const,
+          content: msg.text,
+        })),
+        temperature: 0.3,
+        googleSearchGrounding: true,
+      });
+      aiText = result.text;
+      groundingMetadata = result.groundingMetadata || null;
+    } catch (err) {
+      console.warn('Teacher assistant AI generation failed:', err);
+    }
+
+    if (!aiText) {
+      return NextResponse.json({
+        answer: `⚠️ **Không thể kết nối API AI**\n\nVui lòng kiểm tra lại API key trong file \`.dev.vars\` / \`.env.local\`.`,
+        sources: [],
+      });
+    }
+
+    // 5. Extract grounding sources
+    let citedSources: Array<{ name: string; isExternal: boolean; url: string }> = [];
+    if (groundingMetadata?.groundingChunks?.length) {
+      const seenUrls = new Set<string>();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const chunk of groundingMetadata.groundingChunks as any[]) {
+        const uri = chunk?.web?.uri;
+        let title = chunk?.web?.title || '';
+        if (uri) {
+          if (!title) {
+            try { title = new URL(uri).hostname.replace(/^www\./, ''); } catch { title = 'Nguồn tham khảo'; }
+          }
+          if (!seenUrls.has(uri) && citedSources.length < 5) {
+            seenUrls.add(uri);
+            citedSources.push({ name: title, isExternal: true, url: uri });
+          }
+        }
+      }
+    }
+
+    if (citedSources.length === 0) {
+      const searchQuery = question.replace(/[\r\n]+/g, ' ').trim().slice(0, 80);
+      if (searchQuery) {
+        citedSources = [{
+          name: `Tra cứu: ${searchQuery.length > 50 ? searchQuery.slice(0, 50) + '…' : searchQuery}`,
+          isExternal: true,
+          url: `https://www.google.com/search?q=${encodeURIComponent(searchQuery + ' ' + course)}`,
+        }];
+      }
+    }
+
+    return NextResponse.json({
+      answer: aiText,
+      sources: citedSources,
+    });
+  } catch (error) {
+    console.error('Teacher Assistant Error:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Lỗi kết nối tới Trợ lý AI.' },
+      { status: 500 }
+    );
+  }
+}

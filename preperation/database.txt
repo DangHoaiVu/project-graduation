@@ -1,0 +1,43 @@
+-- 2. KHỞI TẠO KIẾN TRÚC MỚI (Lấy Moodle làm trung tâm)
+-- Bảng users: Bản sao định tuyến giao diện
+CREATE TABLE users (
+    moodle_user_id INT PRIMARY KEY,
+    role VARCHAR(50) NOT NULL,
+    name VARCHAR(255)
+);
+
+-- Bảng chat_sessions: Lịch sử đa hội thoại
+CREATE TABLE chat_sessions (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id INT REFERENCES users(moodle_user_id) ON DELETE CASCADE,
+    moodle_course_id INT NOT NULL,
+    messages JSONB DEFAULT '[]'::jsonb,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Bảng personal_materials: Tài liệu cá nhân
+CREATE TABLE personal_materials (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id INT REFERENCES users(moodle_user_id) ON DELETE CASCADE,
+    moodle_course_id INT NOT NULL,
+    title TEXT NOT NULL,
+    storage_url TEXT NOT NULL
+);
+
+-- Bảng learning_artifacts: Thành quả học tập từ AI
+CREATE TABLE learning_artifacts (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id INT REFERENCES users(moodle_user_id) ON DELETE CASCADE,
+    moodle_course_id INT NOT NULL,
+    artifact_type VARCHAR(50) NOT NULL, -- 'summary', 'mindmap', 'flashcard'
+    content_data JSONB NOT NULL
+);
+
+-- Bảng fcm_tokens: Quản lý mã thiết bị để gửi thông báo đẩy
+CREATE TABLE fcm_tokens (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id INT REFERENCES users(moodle_user_id) ON DELETE CASCADE,
+    token TEXT NOT NULL UNIQUE,
+    device_type VARCHAR(50),
+    last_used_at TIMESTAMPTZ DEFAULT NOW()
+);
