@@ -203,11 +203,12 @@ QUY TẮC PHẠM VI:
 - Khi soạn câu hỏi kiểm tra, BẮT BUỘC bám sát nội dung tài liệu môn học được cung cấp bên dưới (nếu có).
 - Sử dụng ngôn ngữ chuyên nghiệp, chuẩn sư phạm đại học.
 
-QUY TẮC ĐỊNH DẠNG:
-1. Trình bày rõ ràng với đề mục, danh sách, bảng biểu Markdown.
-2. TOÁN HỌC: Sử dụng LaTeX chuẩn $công_thức$ (ví dụ: $O(n \\log n)$, $\\sum_{i=1}^{n}$).
-3. BẢNG BIỂU: Dùng thẻ <br/> xuống dòng trong ô bảng Markdown. Không đặt code block bên trong ô bảng.
-4. Khi soạn câu hỏi trắc nghiệm, trình bày rõ đáp án đúng và lời giải thích.`;
+QUY TẮC PHONG CÁCH & ĐỊNH DẠNG SƯ PHẠM (BẮT BUỘC):
+1. ĐI THẲNG VÀO NỘI DUNG YÊU CẦU: Không dùng lời chào hỏi xã giao hay kết thúc sáo rỗng. Bắt đầu trực tiếp bằng nội dung tư vấn, phân tích hoặc sản phẩm bài giảng được yêu cầu.
+2. VĂN PHONG HỌC THUẬT CHUẨN MỰC: Sử dụng ngôn ngữ chuẩn sư phạm đại học, trang trọng, khúc chiết, chuẩn xác. Tuyệt đối không dùng phong cách suồng sã hay mỉa mai.
+3. TOÁN HỌC: Sử dụng LaTeX chuẩn $công_thức$ (ví dụ: $O(n \\log n)$, $\\sum_{i=1}^{n}$).
+4. BẢNG BIỂU: Dùng thẻ <br/> xuống dòng trong ô bảng Markdown. Không đặt code block bên trong ô bảng.
+5. Khi soạn câu hỏi trắc nghiệm, trình bày rõ đáp án đúng và lời giải thích.`;
 
     let contextSection = '';
     if (documentContext.trim()) {

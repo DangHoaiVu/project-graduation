@@ -4,6 +4,27 @@ import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } fr
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
+  LayoutDashboard,
+  Bot,
+  BookOpen,
+  FolderClosed,
+  CheckSquare,
+  GraduationCap,
+  Flame,
+  User,
+  ExternalLink,
+  RotateCcw,
+  Sparkles,
+  Calendar,
+  Clock,
+  TrendingUp,
+  FileText,
+  Search,
+  BarChart3,
+  Settings,
+  ArrowRight,
+} from 'lucide-react';
+import {
   defaultQuiz,
   inspirationalQuotes,
   nav,
@@ -118,7 +139,13 @@ function Sidebar({
       <nav aria-label="Điều hướng chính">
         <p className="nav-label">KHÔNG GIAN HỌC</p>
 
-        {nav.map(([icon, label]) => (
+        {[
+          { label: 'Tổng quan', icon: <LayoutDashboard size={16} /> },
+          { label: 'Gia sư AI', icon: <Bot size={16} /> },
+          { label: 'Khóa học', icon: <BookOpen size={16} /> },
+          { label: 'Thư viện', icon: <FolderClosed size={16} /> },
+          { label: 'Luyện tập', icon: <CheckSquare size={16} /> },
+        ].map(({ label, icon }) => (
           <button
             key={label}
             className={active === label ? 'nav-item active' : 'nav-item'}
@@ -129,6 +156,7 @@ function Sidebar({
                 setActive(label);
               }
             }}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
           >
             <span>{icon}</span>
             <span>{label}</span>
@@ -139,8 +167,9 @@ function Sidebar({
         <button
           className={active === 'Giảng viên' ? 'nav-item active' : 'nav-item'}
           onClick={() => setActive('Giảng viên')}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
         >
-          <span>🎓</span>
+          <GraduationCap size={16} />
           <span>Góc Giảng Viên {isAdminOrTeacher && '(Admin)'}</span>
         </button>
 
@@ -161,7 +190,7 @@ function Sidebar({
                 )
               }
             >
-              <i style={{ background: c.color }}>{c.icon}</i>
+              <i style={{ background: c.color }}><BookOpen size={13} /></i>
               <span>
                 {c.name}
                 <small>{c.code}</small>
@@ -173,7 +202,7 @@ function Sidebar({
 
       <div className="sidebar-bottom">
         <div className="streak">
-          <span>🔥</span>
+          <Flame size={18} style={{ color: '#f97316' }} />
           <div>
             <strong>7 ngày</strong>
             <small>Chuỗi học tập</small>
@@ -192,7 +221,7 @@ function Sidebar({
           <div>
             <strong>{displayName}</strong>
             <small>
-              {isAdminOrTeacher ? 'Quản trị viên & Giảng viên' : profileUser?.username || 'Sinh viên Moodle'}
+              {isAdminOrTeacher ? 'Quản trị viên & Giảng viên' : profileUser?.username || 'Sinh viên LMS'}
             </small>
           </div>
           <b>•••</b>
@@ -309,7 +338,7 @@ function Dashboard({
             {currentDateTime || 'THỨ NĂM, 27 THÁNG 8, 2026'}
           </p>
           <h1 suppressHydrationWarning>
-            {getGreeting(new Date().getHours())}, {profileUser?.fullname || 'Học viên'} <span>👋</span>
+            {getGreeting(new Date().getHours())}, {profileUser?.fullname || 'Học viên'}
           </h1>
           <p className="subtitle">
             &ldquo;{quote.text}&rdquo; <small>— {quote.author}</small>
@@ -323,7 +352,7 @@ function Dashboard({
         <div className="section-head" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
             <h2>Khóa học của bạn</h2>
-            <p>Phân loại theo vai trò giảng dạy hoặc theo học trên Moodle</p>
+            <p>Phân loại theo vai trò giảng dạy hoặc theo học trên LMS</p>
           </div>
 
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -357,9 +386,13 @@ function Dashboard({
                     fontSize: '12px',
                     fontWeight: 600,
                     cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
                   }}
                 >
-                  🎓 Đang dạy ({teachingCourses.length})
+                  <GraduationCap size={13} />
+                  <span>Đang dạy ({teachingCourses.length})</span>
                 </button>
               )}
               {learningCourses.length > 0 && (
@@ -375,9 +408,13 @@ function Dashboard({
                     fontSize: '12px',
                     fontWeight: 600,
                     cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
                   }}
                 >
-                  📚 Đang học ({learningCourses.length})
+                  <BookOpen size={13} />
+                  <span>Đang học ({learningCourses.length})</span>
                 </button>
               )}
             </div>
@@ -591,7 +628,7 @@ function Dashboard({
                       }}
                       title="Xem lịch sử điểm và nhận xét tất cả các môn"
                     >
-                      <span>📊</span>
+                      <BarChart3 size={14} />
                       <span>Lịch sử điểm</span>
                     </button>
                     <button
@@ -602,23 +639,25 @@ function Dashboard({
                             latestResult.courseName
                           )}&id=${latestResult.courseId}&draft=1&intent=${encodeURIComponent(
                             latestResult.feedback
-                              ? `Chào Gia sư AI, giảng viên vừa chấm bài thi "${latestResult.name}" (${latestResult.score}/${latestResult.maxScore}đ) và nhận xét: "${latestResult.feedback}". Hãy hướng dẫn chi tiết phương hướng ôn tập và giải quyết đúng những phần này!`
+                              ? `Giảng viên vừa chấm bài thi "${latestResult.name}" (${latestResult.score}/${latestResult.maxScore}đ) và nhận xét: "${latestResult.feedback}". Hãy hướng dẫn chi tiết phương hướng ôn tập và giải quyết đúng những phần này!`
                               : `Hãy hướng dẫn ôn tập nội dung bài "${latestResult.name}" (Điểm: ${latestResult.score}/${latestResult.maxScore})`
                           )}`
                         )
                       }
                       title="Hỏi AI về kết quả và nhận xét này"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                     >
-                      ✦ Hỏi AI về kết quả này
+                      <Sparkles size={14} />
+                      <span>Hỏi AI về kết quả này</span>
                     </button>
                   </div>
                 </div>
               </>
             ) : (
               <div className="result-empty">
-                <span style={{ fontSize: '26px' }}>📝</span>
+                <FileText size={26} style={{ color: '#64748b' }} />
                 <p>Chưa có kết quả thi</p>
-                <small>Làm bài kiểm tra trên Moodle để hiển thị điểm tại đây</small>
+                <small>Làm bài kiểm tra trên LMS để hiển thị điểm tại đây</small>
               </div>
             )}
           </article>
@@ -680,18 +719,17 @@ function Dashboard({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    fontSize: '20px',
                     boxShadow: '0 4px 14px rgba(124, 109, 242, 0.4)',
                   }}
                 >
-                  📊
+                  <BarChart3 size={20} style={{ color: '#fff' }} />
                 </div>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#fff' }}>
                     Lịch sử điểm &amp; Nhận xét tất cả các môn
                   </h3>
                   <p style={{ margin: '2px 0 0', fontSize: '13px', color: '#94a3b8' }}>
-                    Tổng hợp {allExamResults.length} đầu điểm từ Moodle LMS kèm nhận xét giảng viên
+                    Tổng hợp {allExamResults.length} đầu điểm từ LMS kèm nhận xét giảng viên
                   </p>
                 </div>
               </div>
@@ -800,9 +838,9 @@ function Dashboard({
                     fontSize: '14px',
                   }}
                 >
-                  <span style={{ fontSize: '36px', display: 'block', marginBottom: '0.6rem' }}>📝</span>
+                  <FileText size={36} style={{ display: 'block', margin: '0 auto 0.6rem', color: '#64748b' }} />
                   <p style={{ margin: 0, fontWeight: 650, color: '#f1f5f9' }}>Chưa có đầu điểm nào cho môn học này</p>
-                  <small style={{ color: '#64748b' }}>Các bài thi và bài kiểm tra trên Moodle sẽ tự động hiển thị tại đây</small>
+                  <small style={{ color: '#64748b' }}>Các bài thi và bài kiểm tra trên LMS sẽ tự động hiển thị tại đây</small>
                 </div>
               ) : (
                 displayedGrades.map((res, idx) => (
@@ -1177,22 +1215,22 @@ function Courses({
 
       <div className="stats-strip">
         <div>
-          <span>▤</span>
+          <BookOpen size={16} />
           <b>{data.length}</b>
           <small>Tổng khóa học</small>
         </div>
         <div>
-          <span>🎓</span>
+          <GraduationCap size={16} />
           <b>{teachingCourses.length}</b>
           <small>Đang giảng dạy</small>
         </div>
         <div>
-          <span>📚</span>
+          <BookOpen size={16} />
           <b>{learningCourses.length}</b>
           <small>Đang theo học</small>
         </div>
         <div>
-          <span>✓</span>
+          <CheckSquare size={16} />
           <b>{data.length > 0 ? Math.round(data.reduce((a, c) => a + c.progress, 0) / data.length) : 0}%</b>
           <small>Tiến độ trung bình</small>
         </div>
@@ -1229,9 +1267,13 @@ function Courses({
               fontSize: '13px',
               fontWeight: 600,
               cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
             }}
           >
-            🎓 Khóa giảng dạy ({teachingCourses.length})
+            <GraduationCap size={13} />
+            <span>Khóa giảng dạy ({teachingCourses.length})</span>
           </button>
         )}
         {learningCourses.length > 0 && (
@@ -1247,9 +1289,13 @@ function Courses({
               fontSize: '13px',
               fontWeight: 600,
               cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
             }}
           >
-            📚 Khóa theo học ({learningCourses.length})
+            <BookOpen size={13} />
+            <span>Khóa theo học ({learningCourses.length})</span>
           </button>
         )}
       </div>
@@ -1271,7 +1317,7 @@ function Courses({
             Hãy chọn mục &ldquo;Tất cả&rdquo; hoặc nhấn &ldquo;Đồng bộ ngay&rdquo; để làm mới danh sách.
           </p>
           <button className="primary-action" onClick={onSync}>
-            ↻ Đồng bộ Moodle ngay
+            <RotateCcw size={14} style={{ marginRight: '5px' }} /> Đồng bộ LMS ngay
           </button>
         </div>
       ) : (
@@ -1287,7 +1333,7 @@ function Courses({
             return (
               <article key={c.code} style={{ '--course': c.color } as CSSProperties}>
                 <div className="large-course-cover">
-                  <span>{c.icon}</span>
+                  <BookOpen size={20} />
                   <small>MOODLE LMS</small>
                 </div>
                 <div className="large-course-body">
@@ -1302,9 +1348,13 @@ function Courses({
                         background: c.isTeacher ? 'rgba(124, 109, 242, 0.3)' : 'rgba(255, 255, 255, 0.08)',
                         color: c.isTeacher ? '#e0d8ff' : '#94a3b8',
                         border: c.isTeacher ? '1px solid rgba(124, 109, 242, 0.5)' : '1px solid rgba(255, 255, 255, 0.1)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
                       }}
                     >
-                      {c.isTeacher ? '🎓 Giảng dạy' : '📚 Học viên'}
+                      {c.isTeacher ? <GraduationCap size={11} /> : <BookOpen size={11} />}
+                      <span>{c.isTeacher ? 'Giảng dạy' : 'Học viên'}</span>
                     </span>
                   </div>
 
@@ -1312,8 +1362,14 @@ function Courses({
                   <p>{c.isTeacher ? 'Khóa bạn phụ trách giảng dạy' : 'Môn học bạn đang tham gia'}</p>
 
                   <div className="course-meta">
-                    <span>▤ {courseResourcesCount} tài liệu học</span>
-                    <span>◎ Gia sư AI</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                      <FileText size={12} />
+                      <span>{courseResourcesCount} tài liệu học</span>
+                    </span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                      <Bot size={12} />
+                      <span>Gia sư AI</span>
+                    </span>
                   </div>
                   <div className="progress-label">
                     <span>Hoàn thành</span>
@@ -1332,12 +1388,22 @@ function Courses({
                             `/course?code=${encodeURIComponent(c.code)}&name=${encodeURIComponent(c.name)}&id=${c.id ?? ''}&mode=teacher`
                           )
                         }
+                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '0 18px' }}
                       >
-                        <span>⚙️ Điểm &amp; Quiz Moodle</span> <b>→</b>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                          <Settings size={13} />
+                          <span>Điểm &amp; Quiz Moodle</span>
+                        </span>
+                        <ArrowRight size={13} />
                       </button>
                     ) : (
-                      <button className="liquid-glass-btn" onClick={() => openCourse(c)}>
-                        <span>Vào không gian học</span> <b>→</b>
+                      <button
+                        className="liquid-glass-btn"
+                        onClick={() => openCourse(c)}
+                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '0 18px' }}
+                      >
+                        <span>Vào không gian học</span>
+                        <ArrowRight size={13} />
                       </button>
                     )}
                   </div>

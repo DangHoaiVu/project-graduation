@@ -22,6 +22,7 @@
     "groq-sdk": "^1.6.0",
     "html-to-image": "^1.11.13",
     "katex": "^0.18.4",
+    "lucide-react": "^1.39.0",
     "next": "16.2.6",
     "openai": "^7.8.0",
     "postgres": "^3.4.9",

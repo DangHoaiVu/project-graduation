@@ -4,6 +4,43 @@ import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } fr
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
+  MessageSquare,
+  FileText,
+  GitFork,
+  Layers,
+  HelpCircle,
+  Zap,
+  BookOpen,
+  Copy,
+  Check,
+  Trash2,
+  Square,
+  Send,
+  Plus,
+  Search,
+  ExternalLink,
+  ChevronLeft,
+  ChevronRight,
+  Folder,
+  BarChart3,
+  GraduationCap,
+  Sparkles,
+  Lock,
+  Globe,
+  Printer,
+  FileDown,
+  RotateCcw,
+  Sliders,
+  CheckCircle2,
+  X,
+  User,
+  ShieldCheck,
+  Award,
+  Calendar,
+  Flame,
+  UploadCloud,
+} from 'lucide-react';
+import {
   baseCourses,
   getCourseSources,
   inspirationalQuotes,
@@ -43,36 +80,39 @@ function Flashcards({
   const [flip, setFlip] = useState(false);
 
   const add = () => {
-    const front = window.prompt('Nhập mặt trước của thẻ');
+    const front = window.prompt('Nhập nội dung mặt trước của thẻ:');
     if (!front) return;
-    const back = window.prompt('Nhập mặt sau của thẻ');
+    const back = window.prompt('Nhập nội dung mặt sau của thẻ:');
     if (!back) return;
     setCards(v => [...v, { front, back }]);
     setI(cards.length);
     setFlip(false);
-    notify('Đã thêm thẻ mới');
+    notify('Đã thêm thẻ ghi nhớ mới');
   };
 
   return (
     <div className="artifact flash">
       <div className="artifact-head">
         <div>
-          <h2>Bộ thẻ {courseTitle}</h2>
+          <h2>Bộ thẻ ghi nhớ: {courseTitle}</h2>
           <p>
-            {cards.length > 0 ? `${i + 1} / ${cards.length} thẻ` : 'Chưa có thẻ nào'}
+            {cards.length > 0 ? `Thẻ ${i + 1} / ${cards.length}` : 'Chưa có thẻ nào'}
           </p>
         </div>
-        <button onClick={add}>＋ Thêm thẻ</button>
+        <button onClick={add} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          <Plus size={14} />
+          Thêm thẻ
+        </button>
       </div>
 
       {cards.length > 0 ? (
         <button className={`flash-card ${flip ? 'flipped' : ''}`} onClick={() => setFlip(!flip)}>
-          <small>{flip ? 'TRẢ LỜI' : 'CÂU HỎI'}</small>
+          <small>{flip ? 'GIẢI THÍCH / ĐÁP ÁN' : 'KHÁI NIỆM / CÂU HỎI'}</small>
           <strong>{flip ? cards[i]?.back : cards[i]?.front}</strong>
           <span>Nhấn để lật thẻ</span>
         </button>
       ) : (
-        <div className="empty-state">Chưa có flashcard nào. Nhấn "+ Thêm thẻ" để bắt đầu.</div>
+        <div className="empty-state">Chưa có thẻ ghi nhớ nào. Nhấn "Thêm thẻ" để tạo mới.</div>
       )}
 
       {cards.length > 0 && (
@@ -82,8 +122,10 @@ function Flashcards({
               setI((i + cards.length - 1) % cards.length);
               setFlip(false);
             }}
+            title="Thẻ trước đó"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           >
-            ←
+            <ChevronLeft size={16} />
           </button>
           <div>
             {cards.map((_, x) => (
@@ -95,8 +137,10 @@ function Flashcards({
               setI((i + 1) % cards.length);
               setFlip(false);
             }}
+            title="Thẻ tiếp theo"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           >
-            →
+            <ChevronRight size={16} />
           </button>
         </div>
       )}
@@ -137,13 +181,15 @@ function StudyArtifact({
   const [topicInput, setTopicInput] = useState('');
   const [allowExternal, setAllowExternal] = useState<boolean>(false);
 
-  const toolIcon = type === 'Tóm tắt' ? '≡' : type === 'Mindmap' ? '⌘' : '▱';
-  const toolName = type === 'Tóm tắt' ? 'Bản tóm tắt thông minh' : type === 'Mindmap' ? 'Sơ đồ tư duy (Mindmap)' : 'Bộ thẻ ghi nhớ (Flashcards)';
+  const toolIcon = type === 'Tóm tắt' ? <FileText size={20} /> : type === 'Mindmap' ? <GitFork size={20} /> : <Layers size={20} />;
+  const toolName = type === 'Tóm tắt' ? 'Bản tóm tắt học thuật' : type === 'Mindmap' ? 'Sơ đồ tư duy (Mindmap)' : 'Bộ thẻ ghi nhớ (Flashcards)';
 
   if (loading) {
     return (
       <div className="artifact artifact-loading">
-        <span className="bot-avatar">✦</span>
+        <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Sparkles size={16} />
+        </span>
         <h3>Đang phân tích tài liệu và khởi tạo {type.toLowerCase()} cấp độ {selectedLevel === 'simple' ? 'Cơ bản' : selectedLevel === 'complex' ? 'Chuyên sâu' : 'Tiêu chuẩn'}…</h3>
         <div className="typing">
           <i />
@@ -159,23 +205,26 @@ function StudyArtifact({
     return (
       <div className="tool-config-panel">
         <div className="tool-config-head">
-          <div className="tool-icon-box">{toolIcon}</div>
+          <div className="tool-icon-box" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{toolIcon}</div>
           <div>
-            <h3>Tạo {toolName}</h3>
-            <p>Trợ lý AI phân tích dựa trên {selectedSourcesCount} nguồn tài liệu đang chọn của môn {courseTitle}.</p>
+            <h3>Khởi tạo {toolName}</h3>
+            <p>Phân tích và tổng hợp dựa trên {selectedSourcesCount} nguồn tài liệu đã chọn của môn {courseTitle}.</p>
           </div>
         </div>
 
         <div>
-          <div className="tool-section-label">1. CHỌN CẤP ĐỘ CHI TIẾT</div>
+          <div className="tool-section-label">1. CHỌN MỨC ĐỘ CHI TIẾT</div>
           <div className="level-selector">
             <button
               type="button"
               className={`level-card ${selectedLevel === 'simple' ? 'active' : ''}`}
               onClick={() => setSelectedLevel('simple')}
             >
-              <strong>⚡ Cơ bản</strong>
-              <small>3-4 ý chính trọng tâm, nắm bắt nhanh trong 1-2 phút (5 thẻ)</small>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Zap size={14} />
+                Cơ bản
+              </strong>
+              <small>3-4 luận điểm trọng tâm, tổng hợp nhanh trong 1-2 phút</small>
             </button>
 
             <button
@@ -183,8 +232,11 @@ function StudyArtifact({
               className={`level-card ${selectedLevel === 'standard' ? 'active' : ''}`}
               onClick={() => setSelectedLevel('standard')}
             >
-              <strong>🎯 Tiêu chuẩn</strong>
-              <small>Cấu trúc chi tiết, 5-7 luận điểm cân đối, dễ hiểu (10 thẻ)</small>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <BookOpen size={14} />
+                Tiêu chuẩn
+              </strong>
+              <small>Cấu trúc mạch lạc, 5-7 luận điểm cân đối, dễ tiếp thu</small>
             </button>
 
             <button
@@ -192,8 +244,11 @@ function StudyArtifact({
               className={`level-card ${selectedLevel === 'complex' ? 'active' : ''}`}
               onClick={() => setSelectedLevel('complex')}
             >
-              <strong>🔬 Chuyên sâu</strong>
-              <small>Đa chiều, đào sâu cơ chế, công thức &amp; tình huống thực tế (15+ thẻ)</small>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Sparkles size={14} />
+                Chuyên sâu
+              </strong>
+              <small>Phân tích đa chiều, đào sâu nguyên lý, công thức và ví dụ thực tế</small>
             </button>
           </div>
         </div>
@@ -204,12 +259,12 @@ function StudyArtifact({
             className="tool-topic-input"
             value={topicInput}
             onChange={e => setTopicInput(e.target.value)}
-            placeholder={`Để trống để tạo cho toàn bộ môn ${courseTitle}, hoặc nhập chuyên đề...`}
+            placeholder={`Để trống để phân tích toàn bộ môn ${courseTitle}, hoặc nhập chuyên đề...`}
           />
         </div>
 
         <div>
-          <div className="tool-section-label">3. NGUỒN KIẾN THỨC MỞ RỘNG (EXTERNAL SOURCE)</div>
+          <div className="tool-section-label">3. PHẠM VI DỮ LIỆU THAM KHẢO</div>
           <button
             type="button"
             className={`level-card ${allowExternal ? 'active' : ''}`}
@@ -217,15 +272,18 @@ function StudyArtifact({
             style={{ width: '100%' }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <strong>{allowExternal ? '🌐 Đang bật: Cho phép mở rộng kiến thức bên ngoài' : '🔒 Đang tắt: Bám sát tài liệu được cung cấp'}</strong>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {allowExternal ? <Globe size={15} /> : <Lock size={15} />}
+                {allowExternal ? 'Cho phép liên hệ kiến thức thực tiễn bên ngoài' : 'Bám sát nghiêm ngặt tài liệu được cung cấp'}
+              </strong>
               <span className="level-badge" style={{ background: allowExternal ? 'rgba(56, 189, 248, 0.2)' : undefined }}>
                 {allowExternal ? 'BẬT' : 'TẮT'}
               </span>
             </div>
             <small>
               {allowExternal
-                ? 'Cho phép AI kết hợp kinh nghiệm thực tế trong ngành, ứng dụng hiện đại và mở rộng tư duy sáng tạo (out-of-the-box).'
-                : 'AI chỉ phân tích nghiêm ngặt dựa trên văn bản tài liệu môn học được cung cấp.'}
+                ? 'Cho phép AI liên hệ thực tế ngành, ứng dụng hiện đại và mở rộng tư duy chuyên môn.'
+                : 'AI phân tích nghiêm ngặt chỉ dựa trên nội dung tài liệu môn học được cung cấp.'}
             </small>
           </button>
         </div>
@@ -234,15 +292,17 @@ function StudyArtifact({
           type="button"
           className="generate-tool-btn"
           onClick={() => onGenerate(selectedLevel, topicInput.trim() || courseTitle, allowExternal)}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
         >
-          ✦ Bắt đầu tạo {type}
+          <Sparkles size={16} />
+          Bắt đầu khởi tạo {type}
         </button>
       </div>
     );
   }
 
   const levelLabel =
-    artifact.level === 'simple' ? '⚡ Cơ bản' : artifact.level === 'complex' ? '🔬 Chuyên sâu' : '🎯 Tiêu chuẩn';
+    artifact.level === 'simple' ? 'Cơ bản' : artifact.level === 'complex' ? 'Chuyên sâu' : 'Tiêu chuẩn';
 
   if (type === 'Mindmap') {
     const map = artifact.data as { root: string; branches: Array<{ title: string; items: string[] }> };
@@ -267,8 +327,13 @@ function StudyArtifact({
             <span className="level-badge">{levelLabel}</span>
             <small style={{ color: '#94a3b8' }}>Chủ đề: {artifact.topic}</small>
           </div>
-          <button className="reconfigure-btn" onClick={onReset}>
-            🔄 Đổi cấp độ / Tạo lại
+          <button
+            className="reconfigure-btn"
+            onClick={onReset}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            <RotateCcw size={14} />
+            Cấu hình lại
           </button>
         </div>
         <Flashcards
@@ -286,11 +351,11 @@ function StudyArtifact({
 
   const handleExportDocx = async () => {
     try {
-      notify('Đang xuất file Word (.docx)…');
+      notify('Đang xuất tài liệu Word (.docx)…');
       await exportSummaryToDocx(summary, courseTitle);
-      notify('Đã tải file Word (.docx) thành công!');
+      notify('Đã tải tệp Word (.docx) thành công');
     } catch {
-      notify('Không thể xuất file Word.');
+      notify('Không thể xuất tệp Word.');
     }
   };
 
@@ -298,45 +363,67 @@ function StudyArtifact({
     <div className="artifact summary">
       <div className="artifact-head">
         <div>
-          <h2>{summary.title || `Tóm tắt ${courseTitle}`}</h2>
+          <h2>{summary.title || `Tóm tắt: ${courseTitle}`}</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
             <span className="level-badge">{levelLabel}</span>
             <small style={{ color: '#94a3b8' }}>Chủ đề: {artifact.topic}</small>
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-          <button className="reconfigure-btn" onClick={onReset}>
-            🔄 Đổi cấp độ / Tạo lại
-          </button>
-          <button className="reconfigure-btn" onClick={() => void copyText(text)}>
-            ⧉ Sao chép
+          <button
+            className="reconfigure-btn"
+            onClick={onReset}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            <RotateCcw size={14} />
+            Cấu hình lại
           </button>
           <button
             className="reconfigure-btn"
-            style={{ background: 'rgba(59, 130, 246, 0.25)', borderColor: '#3b82f6', color: '#ffffff' }}
+            onClick={() => void copyText(text)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            <Copy size={14} />
+            Sao chép
+          </button>
+          <button
+            className="reconfigure-btn"
+            style={{
+              background: 'rgba(59, 130, 246, 0.25)',
+              borderColor: '#3b82f6',
+              color: '#ffffff',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
             onClick={() => void handleExportDocx()}
           >
-            📄 Xuất Word (.docx)
+            <FileDown size={14} />
+            Xuất Word (.docx)
           </button>
           <button
             onClick={() => {
               window.print();
-              notify('Đã mở hộp thoại in / xuất PDF');
+              notify('Đã mở giao diện in / lưu PDF');
             }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >
-            ↓ In / PDF
+            <Printer size={14} />
+            In tài liệu
           </button>
         </div>
       </div>
-      <h3>Ý chính</h3>
+      <h3>Tổng quan</h3>
       <p>{summary.overview}</p>
+      <h3>Nội dung chính</h3>
       <ul>
         {(summary.points ?? []).map(p => (
           <li key={p}>{p}</li>
         ))}
       </ul>
-      <div className="source-note">
-        ▤ Tổng hợp dựa trên {selectedSourcesCount} nguồn tài liệu của môn học. Hãy kiểm tra trích dẫn trước khi sử dụng.
+      <div className="source-note" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <FileText size={14} />
+        Tổng hợp dựa trên {selectedSourcesCount} tài liệu môn học. Vui lòng đối chiếu với giáo trình chính thức khi ôn tập.
       </div>
     </div>
   );
@@ -382,12 +469,12 @@ function isValidKnowledgeSource(type: string, name: string) {
   return false;
 }
 
-function getSourceBadge(type: string, name: string) {
+function getSourceBadge(type: string, name: string): { label: React.ReactNode; className: string } {
   const upperType = (type || '').toUpperCase();
   const lowerName = name.toLowerCase();
 
   if (upperType === 'LINK' || upperType === 'URL' || lowerName.startsWith('http') || lowerName.includes('.link')) {
-    return { label: '🌐', className: 'link-badge' };
+    return { label: <Globe size={14} />, className: 'link-badge' };
   }
   if (upperType === 'DOCX' || upperType === 'DOC' || lowerName.endsWith('.docx') || lowerName.endsWith('.doc')) {
     return { label: 'W', className: 'word-badge' };
@@ -654,7 +741,7 @@ function CourseDetailContent() {
   const [chat, setChat] = useState<ChatMessage[]>([
     {
       role: 'ai',
-      text: `Chào bạn! Mình là Trợ lý AI môn ${activeCourse.name}. Bạn có câu hỏi nào cần giải đáp?`,
+      text: `Trợ lý Học tập AI môn ${activeCourse.name} đã sẵn sàng. Bạn có thể đặt câu hỏi hoặc yêu cầu phân tích, tóm tắt tài liệu.`,
       sources: [`${courseSources.length} tài liệu sẵn sàng`],
     },
   ]);
@@ -664,7 +751,7 @@ function CourseDetailContent() {
     setChat([
       {
         role: 'ai',
-        text: `Chào bạn! Mình là Trợ lý AI môn ${activeCourse.name}. Bạn có câu hỏi nào cần giải đáp?`,
+        text: `Trợ lý Học tập AI môn ${activeCourse.name} đã sẵn sàng. Bạn có thể đặt câu hỏi hoặc yêu cầu phân tích, tóm tắt tài liệu.`,
         sources: [`${courseSources.length} tài liệu sẵn sàng`],
       },
     ]);
@@ -681,11 +768,23 @@ function CourseDetailContent() {
   const [answerStyle, setAnswerStyle] = useState<'concise' | 'detailed'>('concise');
   const [isSourcePanelCollapsed, setIsSourcePanelCollapsed] = useState<boolean>(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string>('auto');
-  const [availableModels, setAvailableModels] = useState<Array<{ id: string; provider: string; label: string }>>([]);
+  const selectedModel = 'auto';
   const [showGradeHistory, setShowGradeHistory] = useState<boolean>(false);
   const [teacherTab, setTeacherTab] = useState<'assistant' | 'grades' | 'quiz'>('assistant');
   const askedIntent = useRef(false);
+
+  // Student Document & Resource Upload Modal State
+  const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
+  const [uploadTab, setUploadTab] = useState<'file' | 'url' | 'text'>('file');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadFileTitle, setUploadFileTitle] = useState<string>('');
+  const [uploadUrl, setUploadUrl] = useState<string>('');
+  const [uploadUrlTitle, setUploadUrlTitle] = useState<string>('');
+  const [uploadTextTitle, setUploadTextTitle] = useState<string>('');
+  const [uploadTextContent, setUploadTextContent] = useState<string>('');
+  const [uploadLoading, setUploadLoading] = useState<boolean>(false);
+  const [uploadDragActive, setUploadDragActive] = useState<boolean>(false);
+  const uploadFileInputRef = useRef<HTMLInputElement>(null);
 
   // Compute exam results for current active course ONLY
   const courseExamResults = useMemo(() => {
@@ -719,17 +818,6 @@ function CourseDetailContent() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showGradeHistory]);
-
-  // Fetch available AI models on mount
-  useEffect(() => {
-    fetch('/api/models')
-      .then(r => r.json())
-      .then((data) => {
-        const typed = data as { models?: Array<{ id: string; provider: string; label: string }> };
-        if (typed.models) setAvailableModels(typed.models);
-      })
-      .catch(() => {});
-  }, []);
 
   // Auto cleanup RAM vector cache on course unmount / exit
   useEffect(() => {
@@ -767,7 +855,7 @@ function CourseDetailContent() {
     setChat([
       {
         role: 'ai',
-        text: `Chào bạn! Mình là Trợ lý AI môn ${activeCourse.name}. Bạn có câu hỏi nào cần giải đáp?`,
+        text: `Trợ lý Học tập AI môn ${activeCourse.name} đã sẵn sàng. Bạn có thể đặt câu hỏi hoặc yêu cầu phân tích, tóm tắt tài liệu.`,
         sources: [`${courseSources.length} tài liệu sẵn sàng`],
       },
     ]);
@@ -961,30 +1049,109 @@ function CourseDetailContent() {
   };
 
   const handleAddSource = () => {
-    const name = window.prompt('Nhập đường dẫn Web hoặc tên tài liệu (Chỉ hỗ trợ PDF, Word .doc/.docx, hoặc link Web):');
-    if (!name?.trim()) return;
-    const trimmed = name.trim();
+    setShowUploadModal(true);
+  };
 
-    if (!isValidKnowledgeSource('', trimmed)) {
-      notify('Chỉ hỗ trợ thêm tài liệu PDF (.pdf), Word (.doc, .docx) hoặc liên kết Web (http/https).');
-      return;
+  const handleUploadSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (uploadTab === 'file') {
+      if (!uploadFile) {
+        notify('Vui lòng chọn hoặc kéo thả một tệp tài liệu.');
+        return;
+      }
+      setUploadLoading(true);
+      try {
+        const fileName = uploadFileTitle.trim() || uploadFile.name;
+        const ext = uploadFile.name.split('.').pop()?.toLowerCase() || '';
+        let type: 'PDF' | 'DOCX' | 'PPTX' | 'TXT' | 'FILE' = 'FILE';
+        if (ext === 'pdf') type = 'PDF';
+        else if (ext === 'docx' || ext === 'doc') type = 'DOCX';
+        else if (ext === 'pptx' || ext === 'ppt') type = 'PPTX';
+        else if (ext === 'txt') type = 'TXT';
+
+        let content = '';
+        if (ext === 'txt') {
+          content = await uploadFile.text();
+        }
+
+        try {
+          const formData = new FormData();
+          formData.append('file', uploadFile);
+          formData.append('title', fileName);
+          formData.append('courseId', activeCourse.code);
+          if (activeCourse.id) formData.append('moodleCourseId', String(activeCourse.id));
+          if (content) formData.append('content', content);
+
+          await fetch('/api/documents/process', {
+            method: 'POST',
+            body: formData,
+          });
+        } catch (err) {
+          console.warn('Document indexing note:', err);
+        }
+
+        const sizeStr = (uploadFile.size / (1024 * 1024)).toFixed(1) + ' MB';
+        const newItem: CourseSourceItem = {
+          name: fileName,
+          type,
+          sizeOrPages: `Tệp đã nạp · ${sizeStr}`,
+          courseCode: activeCourse.code,
+        };
+
+        setSources(v => [newItem, ...v]);
+        setChecked(v => [true, ...v]);
+        setShowUploadModal(false);
+        setUploadFile(null);
+        setUploadFileTitle('');
+        notify(`Đã nạp thành công tài liệu: "${fileName}"`);
+      } catch (err) {
+        notify(err instanceof Error ? err.message : 'Tải tài liệu thất bại.');
+      } finally {
+        setUploadLoading(false);
+      }
+    } else if (uploadTab === 'url') {
+      if (!uploadUrl.trim()) {
+        notify('Vui lòng nhập đường dẫn liên kết.');
+        return;
+      }
+      const cleanUrl = uploadUrl.trim();
+      if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+        notify('Đường dẫn phải bắt đầu bằng http:// hoặc https://');
+        return;
+      }
+      const title = uploadUrlTitle.trim() || cleanUrl;
+      const newItem: CourseSourceItem = {
+        name: title,
+        type: 'LINK',
+        sizeOrPages: 'Liên kết web',
+        url: cleanUrl,
+        courseCode: activeCourse.code,
+      };
+      setSources(v => [newItem, ...v]);
+      setChecked(v => [true, ...v]);
+      setShowUploadModal(false);
+      setUploadUrl('');
+      setUploadUrlTitle('');
+      notify(`Đã thêm liên kết: "${title}"`);
+    } else if (uploadTab === 'text') {
+      if (!uploadTextContent.trim()) {
+        notify('Vui lòng nhập nội dung ghi chú.');
+        return;
+      }
+      const title = uploadTextTitle.trim() || 'Ghi chú bài học mới';
+      const newItem: CourseSourceItem = {
+        name: title,
+        type: 'TXT',
+        sizeOrPages: 'Ghi chú cá nhân',
+        courseCode: activeCourse.code,
+      };
+      setSources(v => [newItem, ...v]);
+      setChecked(v => [true, ...v]);
+      setShowUploadModal(false);
+      setUploadTextTitle('');
+      setUploadTextContent('');
+      notify(`Đã lưu ghi chú: "${title}"`);
     }
-
-    const isUrl = trimmed.startsWith('http://') || trimmed.startsWith('https://');
-    const isDoc = trimmed.endsWith('.docx') || trimmed.endsWith('.doc');
-    const isPpt = trimmed.endsWith('.pptx') || trimmed.endsWith('.ppt');
-
-    const newItem: CourseSourceItem = {
-      name: trimmed,
-      type: isUrl ? 'LINK' : isDoc ? 'DOCX' : isPpt ? 'PPTX' : 'PDF',
-      sizeOrPages: isUrl ? 'Liên kết web' : 'Tài liệu cá nhân',
-      url: isUrl ? trimmed : undefined,
-      courseCode: activeCourse.code,
-    };
-
-    setSources(v => [newItem, ...v]);
-    setChecked(v => [true, ...v]);
-    notify(`Đã nạp "${trimmed}" vào danh sách nguồn`);
   };
 
   const visibleSources = sources
@@ -1031,8 +1198,8 @@ function CourseDetailContent() {
           </Link>
 
           <p className="nav-label second">DÀNH CHO GIẢNG VIÊN</p>
-          <Link href="/home?tab=teacher" className="nav-item">
-            <span>🎓</span>
+          <Link href="/home?tab=teacher" className="nav-item" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <GraduationCap size={16} />
             <span>Góc Giảng Viên</span>
           </Link>
 
@@ -1053,7 +1220,7 @@ function CourseDetailContent() {
                   );
                 }}
               >
-                <i style={{ background: c.color }}>{c.icon}</i>
+                <i style={{ background: c.color }}><BookOpen size={13} /></i>
                 <span>
                   {c.name}
                   <small>{c.code}</small>
@@ -1065,7 +1232,7 @@ function CourseDetailContent() {
 
         <div className="sidebar-bottom">
           <div className="streak">
-            <span>🔥</span>
+            <Flame size={18} style={{ color: '#f97316' }} />
             <div>
               <strong>7 ngày</strong>
               <small>Chuỗi học tập</small>
@@ -1083,7 +1250,7 @@ function CourseDetailContent() {
             </span>
             <div>
               <strong>{displayName}</strong>
-              <small>{user?.username || 'Sinh viên Moodle'}</small>
+              <small>{user?.username || 'Sinh viên LMS'}</small>
             </div>
             <b>•••</b>
           </button>
@@ -1099,7 +1266,7 @@ function CourseDetailContent() {
 
           <div className="global-search">
             <label className="search">
-              <span>⌕</span>
+              <Search size={14} style={{ opacity: 0.7 }} />
               <input
                 ref={searchRef}
                 value={search}
@@ -1116,19 +1283,19 @@ function CourseDetailContent() {
               className="icon-button"
               onClick={() => setNotifications(!notifications)}
             >
-              ♧<i />
+              <Sparkles size={16} /><i />
             </button>
             <button
               className={`sync ${syncing ? 'syncing' : ''}`}
               onClick={() => void syncMoodleData()}
-              title="Đồng bộ lại tài liệu từ Moodle"
+              title="Đồng bộ lại tài liệu từ LMS"
             >
-              <span>↻</span>
-              {syncing ? 'Đang tải…' : 'Đồng bộ Moodle'}
+              <RotateCcw size={13} />
+              <span>{syncing ? 'Đang tải…' : 'Đồng bộ LMS'}</span>
             </button>
             <Link href="/home" className="sync">
               <span>←</span>
-              Trang chủ
+              <span>Trang chủ</span>
             </Link>
           </div>
 
@@ -1143,7 +1310,7 @@ function CourseDetailContent() {
                   const date = new Date(d.timestamp);
                   return (
                     <div key={d.id}>
-                      <span className="purple">▤</span>
+                      <span className="purple"><FileText size={14} /></span>
                       <section>
                         <b>{d.name}</b>
                         <small>
@@ -1155,7 +1322,7 @@ function CourseDetailContent() {
                 })
               ) : (
                 <div style={{ padding: '0.75rem 1rem', fontSize: '13px', color: '#94a3b8' }}>
-                  Không có bài tập hoặc thông báo mới từ Moodle.
+                  Không có bài tập hoặc thông báo mới từ LMS.
                 </div>
               )}
             </div>
@@ -1181,9 +1348,13 @@ function CourseDetailContent() {
                       background: 'rgba(124, 109, 242, 0.35)',
                       color: '#e0d8ff',
                       border: '1px solid rgba(124, 109, 242, 0.5)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
                     }}
                   >
-                    🎓 Vai trò: Giảng viên
+                    <GraduationCap size={12} />
+                    <span>Vai trò: Giảng viên</span>
                   </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
@@ -1207,14 +1378,14 @@ function CourseDetailContent() {
                         textDecoration: 'none',
                         transition: 'all 0.15s ease',
                       }}
-                      title="Mở khóa học này trực tiếp trên Moodle"
+                      title="Mở khóa học này trực tiếp trên LMS"
                     >
                       <span>Xem trên Moodle</span>
-                      <span style={{ fontSize: '11px' }}>↗</span>
+                      <ExternalLink size={10} />
                     </a>
                   )}
                 </div>
-                <p>Mã môn: {activeCourse.code || 'Moodle'}</p>
+                <p>Mã môn: {activeCourse.code || 'LMS'}</p>
               </div>
 
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1233,7 +1404,7 @@ function CourseDetailContent() {
                   >
                     {allCourses.map(c => (
                       <option key={c.code} value={c.code}>
-                        {c.isTeacher ? '🎓 ' : '📚 '} {c.name} · {c.code}
+                        {c.name} · {c.code}
                       </option>
                     ))}
                   </select>
@@ -1257,7 +1428,7 @@ function CourseDetailContent() {
             <div className="workspace-title course-workspace-title">
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                  <span className="eyebrow" style={{ margin: 0 }}>KHÔNG GIAN MÔN HỌC &amp; GIA SƯ ẢO 1-1</span>
+                  <span className="eyebrow" style={{ margin: 0 }}>KHÔNG GIAN MÔN HỌC &amp; GIA SƯ AI</span>
                   <span
                     style={{
                       fontSize: '11px',
@@ -1267,38 +1438,17 @@ function CourseDetailContent() {
                       background: 'rgba(255, 255, 255, 0.1)',
                       color: '#94a3b8',
                       border: '1px solid rgba(255, 255, 255, 0.15)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
                     }}
                   >
-                    📚 Vai trò: Học viên
+                    <BookOpen size={12} />
+                    <span>Vai trò: Học viên</span>
                   </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                   <h1 style={{ margin: 0 }}>{activeCourse.name}</h1>
-                  {activeCourse.id && (
-                    <a
-                      href={`${(moodle?.moodleUrl || 'http://moodle.test').replace(/\/$/, '')}/course/view.php?id=${activeCourse.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        padding: '3px 10px',
-                        borderRadius: '20px',
-                        background: 'rgba(124, 109, 242, 0.15)',
-                        border: '1px solid rgba(124, 109, 242, 0.35)',
-                        color: '#cfc8ff',
-                        fontSize: '0.8rem',
-                        fontWeight: 600,
-                        textDecoration: 'none',
-                        transition: 'all 0.15s ease',
-                      }}
-                      title="Mở khóa học này trực tiếp trên Moodle"
-                    >
-                      <span>Xem trên Moodle</span>
-                      <span style={{ fontSize: '11px' }}>↗</span>
-                    </a>
-                  )}
                 </div>
                 <p>Mã môn: {activeCourse.code || 'Moodle'}</p>
               </div>
@@ -1306,10 +1456,10 @@ function CourseDetailContent() {
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                 {allCourses.length > 0 && (
                   <select
+                    className="course-select-input"
                     value={activeCourse.code}
                     onChange={e => {
-                      const targetCode = e.target.value;
-                      const target = allCourses.find(c => c.code.toLowerCase() === targetCode.toLowerCase());
+                      const target = allCourses.find(c => c.code === e.target.value);
                       if (target) {
                         router.replace(
                           `/course?code=${encodeURIComponent(target.code)}&name=${encodeURIComponent(target.name)}&id=${target.id ?? ''}`
@@ -1319,12 +1469,12 @@ function CourseDetailContent() {
                   >
                     {allCourses.map(c => (
                       <option key={c.code} value={c.code}>
-                        {c.isTeacher ? '🎓 ' : '📚 '} {c.name} · {c.code}
+                        {c.name} ({c.code})
                       </option>
                     ))}
                     {!allCourses.some(c => c.code.toLowerCase() === activeCourse.code.toLowerCase()) && (
                       <option value={activeCourse.code}>
-                        📚 {activeCourse.name} · {activeCourse.code}
+                        {activeCourse.name} ({activeCourse.code})
                       </option>
                     )}
                   </select>
@@ -1337,34 +1487,36 @@ function CourseDetailContent() {
             <aside className={`source-panel ${isSourcePanelCollapsed ? 'collapsed' : ''}`}>
               <div className="panel-title">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                  <strong>Nguồn kiến thức ({activeCourse.code || 'Moodle'})</strong>
+                  <Folder size={15} style={{ color: '#a78bfa' }} />
+                  <strong>Nguồn tài liệu</strong>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                  <span>{selectedSourceNames.length} đang bật</span>
+                  <span>{selectedSourceNames.length} đã chọn</span>
                   <button
                     type="button"
                     className="collapse-source-btn"
                     onClick={() => setIsSourcePanelCollapsed(true)}
-                    title="Thu gọn danh sách tài liệu môn học (mở rộng tối đa không gian trợ lý)"
+                    title="Thu gọn danh sách tài liệu môn học"
                     aria-label="Thu gọn danh sách tài liệu môn học"
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   >
-                    ◀
+                    <ChevronLeft size={14} />
                   </button>
                 </div>
               </div>
 
               <label className="source-search">
-                ⌕{' '}
+                <Search size={14} style={{ color: '#94a3b8', flexShrink: 0 }} />
                 <input
                   value={sourceQuery}
                   onChange={e => setSourceQuery(e.target.value)}
-                  placeholder="Tìm trong tài liệu môn học..."
+                  placeholder="Tìm tài liệu môn học..."
                 />
               </label>
 
               {visibleSources.length === 0 ? (
                 <div className="empty-state" style={{ padding: '1rem', fontSize: '13px' }}>
-                  Chưa có tài liệu nào trong khóa học này. Hãy nhấn &ldquo;＋ Thêm nguồn (PDF, Word, Web)&rdquo; bên dưới hoặc đồng bộ Moodle.
+                  Chưa có tài liệu nào trong khóa học này. Hãy nhấn "Thêm nguồn tài liệu" bên dưới hoặc đồng bộ từ Moodle.
                 </div>
               ) : (
                 visibleSources.map(({ item, i }) => {
@@ -1386,10 +1538,11 @@ function CourseDetailContent() {
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={e => e.stopPropagation()}
-                            style={{ color: 'inherit', textDecoration: 'none' }}
-                            title="Mở tài liệu Moodle"
+                            style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            title="Mở tài liệu gốc"
                           >
-                            {item.name} ↗
+                            <span>{item.name}</span>
+                            <ExternalLink size={12} style={{ opacity: 0.7 }} />
                           </a>
                         ) : (
                           item.name
@@ -1403,8 +1556,9 @@ function CourseDetailContent() {
                 })
               )}
 
-              <button className="add-source" onClick={handleAddSource}>
-                ＋ Thêm nguồn (PDF, Word, Web)
+              <button className="add-source" onClick={handleAddSource} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                <Plus size={15} />
+                Thêm nguồn tài liệu (PDF, Word, Web)
               </button>
 
               <div
@@ -1414,8 +1568,8 @@ function CourseDetailContent() {
                     const next = !prev;
                     notify(
                       next
-                        ? 'Đã bật: Mở rộng kiến thức thực tế & tư duy ngoài giáo trình'
-                        : 'Đã bật: Chế độ bám sát tài liệu môn học'
+                        ? 'Đã bật: Cho phép liên hệ kiến thức thực tiễn ngoài giáo trình'
+                        : 'Đã bật: Chế độ bám sát nghiêm ngặt tài liệu môn học'
                     );
                     return next;
                   });
@@ -1425,7 +1579,7 @@ function CourseDetailContent() {
               >
                 <div className="grounded-header">
                   <div className="grounded-header-left">
-                    <span style={{ fontSize: '14px', lineHeight: 1 }}>{allowExternalSource ? '🌐' : '🔒'}</span>
+                    {allowExternalSource ? <Globe size={15} style={{ color: '#38bdf8' }} /> : <Lock size={15} style={{ color: '#94a3b8' }} />}
                     <strong className="grounded-title">{allowExternalSource ? 'Nguồn mở rộng' : 'Bám sát tài liệu'}</strong>
                   </div>
                   <span className={`unified-status-chip ${allowExternalSource ? 'on' : 'off'}`}>
@@ -1434,8 +1588,8 @@ function CourseDetailContent() {
                 </div>
                 <p className="grounded-subtitle">
                   {allowExternalSource
-                    ? 'AI kết hợp giáo trình với kiến thức thực tiễn & công nghệ hiện đại ngoài Moodle.'
-                    : 'AI phân tích nghiêm ngặt dựa trên toàn bộ tài liệu đang chọn.'}
+                    ? 'AI kết hợp giáo trình với kiến thức thực tiễn và công nghệ hiện đại.'
+                    : 'AI phân tích nghiêm ngặt chỉ dựa trên các tài liệu đã chọn.'}
                 </p>
               </div>
             </aside>
@@ -1449,19 +1603,29 @@ function CourseDetailContent() {
                       type="button"
                       className="expand-source-pill"
                       onClick={() => setIsSourcePanelCollapsed(false)}
-                      title="Mở bảng nguồn tài liệu môn học"
+                      title="Mở danh sách tài liệu môn học"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                     >
-                      <span>📁 Nguồn môn học</span>
+                      <Folder size={14} />
+                      <span></span>
                       <span className="source-count-badge">{selectedSourceNames.length}</span>
                     </button>
                   )}
-                  {['Chat', 'Tóm tắt', 'Mindmap', 'Flashcard', 'Trắc nghiệm'].map(t => (
+                  {[
+                    { id: 'Chat', label: 'Hỏi đáp', icon: <MessageSquare size={14} /> },
+                    { id: 'Tóm tắt', label: 'Tóm tắt', icon: <FileText size={14} /> },
+                    { id: 'Mindmap', label: 'Sơ đồ tư duy', icon: <GitFork size={14} /> },
+                    { id: 'Flashcard', label: 'Thẻ ghi nhớ', icon: <Layers size={14} /> },
+                    { id: 'Trắc nghiệm', label: 'Trắc nghiệm', icon: <HelpCircle size={14} /> },
+                  ].map(tab => (
                     <button
-                      key={t}
-                      className={tool === t ? 'selected' : ''}
-                      onClick={() => void openTool(t)}
+                      key={tab.id}
+                      className={tool === tab.id ? 'selected' : ''}
+                      onClick={() => void openTool(tab.id)}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                     >
-                      {t === 'Chat' ? '✦' : t === 'Tóm tắt' ? '≡' : t === 'Mindmap' ? '⌘' : t === 'Flashcard' ? '▱' : '✓'} {t}
+                      {tab.icon}
+                      <span>{tab.label}</span>
                     </button>
                   ))}
                 </div>
@@ -1471,9 +1635,10 @@ function CourseDetailContent() {
                     type="button"
                     onClick={() => setShowGradeHistory(prev => !prev)}
                     className="grade-history-tab-btn"
-                    title={showGradeHistory ? 'Ẩn bảng điểm (Esc)' : 'Xem bảng điểm & nhận xét môn học'}
+                    title={showGradeHistory ? 'Ẩn bảng điểm (Esc)' : 'Xem kết quả học tập & nhận xét môn học'}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                   >
-                    <span>📊</span>
+                    <BarChart3 size={14} />
                     <span>Bảng điểm</span>
                     {courseExamResults.length > 0 && (
                       <span
@@ -1496,11 +1661,12 @@ function CourseDetailContent() {
                     target="_blank"
                     rel="noopener noreferrer"
                     className="lms-redirect-btn"
-                    title={`Mở trực tiếp khóa học ${activeCourse.name} trên hệ thống Moodle LMS`}
+                    title={`Mở trực tiếp khóa học ${activeCourse.name} trên hệ thống LMS`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                   >
-                    <span className="lms-redirect-icon">🎓</span>
+                    <GraduationCap size={15} />
                     <span>Mở LMS</span>
-                    <span className="lms-redirect-arrow">↗</span>
+                    <ExternalLink size={12} style={{ opacity: 0.8 }} />
                   </a>
                 </div>
               </div>
@@ -1510,7 +1676,11 @@ function CourseDetailContent() {
                   <div className="messages">
                     {chat.map((m, i) => (
                       <div className={`message ${m.role}`} key={i}>
-                        {m.role === 'ai' && <span className="bot-avatar">✦</span>}
+                        {m.role === 'ai' && (
+                          <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <Sparkles size={16} />
+                          </span>
+                        )}
                         <div id={`chat-msg-${i}`} style={{ minWidth: 0, width: '100%' }}>
                           <MarkdownRenderer content={m.text} />
                           {(() => {
@@ -1540,11 +1710,11 @@ function CourseDetailContent() {
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       title="Nhấp để chuyển đến nguồn ngoài đối chiếu & kiểm chứng thông tin"
-                                      style={{ textDecoration: 'none' }}
+                                      style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                                     >
-                                      <span className="citation-icon">➕</span>
+                                      <Globe size={12} style={{ color: '#38bdf8' }} />
                                       <span className="citation-text">{cleanName}</span>
-                                      <span style={{ fontSize: '10px', opacity: 0.8, marginLeft: '2px' }}>↗</span>
+                                      <ExternalLink size={10} style={{ opacity: 0.7 }} />
                                     </a>
                                   );
                                 })}
@@ -1566,14 +1736,15 @@ function CourseDetailContent() {
                                     await navigator.clipboard.writeText(m.text);
                                   }
                                   setCopiedIndex(i);
-                                  notify('Đã sao chép nội dung (Hỗ trợ Word & Markdown)');
+                                  notify('Đã sao chép nội dung câu trả lời');
                                   window.setTimeout(() => {
                                     setCopiedIndex(prev => (prev === i ? null : prev));
                                   }, 2000);
                                 }}
-                                title="Sao chép nội dung (hỗ trợ dán bảng/tiêu đề vào Word hoặc dán thuần văn bản)"
+                                title="Sao chép câu trả lời (hỗ trợ dán vào Word hoặc Markdown)"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
                               >
-                                <span>{copiedIndex === i ? '✓' : '📋'}</span>
+                                {copiedIndex === i ? <Check size={13} /> : <Copy size={13} />}
                                 <span>{copiedIndex === i ? 'Đã sao chép' : 'Sao chép'}</span>
                               </button>
                             </div>
@@ -1583,7 +1754,9 @@ function CourseDetailContent() {
                     ))}
                     {loading && (
                       <div className="message ai">
-                        <span className="bot-avatar">✦</span>
+                        <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <Sparkles size={16} />
+                        </span>
                         <div className="typing">
                           <i />
                           <i />
@@ -1616,39 +1789,19 @@ function CourseDetailContent() {
                               const next = prev === 'concise' ? 'detailed' : 'concise';
                               notify(
                                 next === 'detailed'
-                                  ? 'Đã chọn: Phân tích Chi tiết & Chuyên sâu'
-                                  : 'Đã chọn: Trả lời Nhanh & Trọng tâm'
+                                  ? 'Chế độ phân tích: Chi tiết & Chuyên sâu'
+                                  : 'Chế độ phân tích: Nhanh & Trọng tâm'
                               );
                               return next;
                             });
                           }}
                           className={`mode-indicator-chip ${answerStyle === 'detailed' ? 'style-detailed' : ''}`}
-                          title="Bấm để chuyển đổi giữa trả lời nhanh và phân tích chuyên sâu"
+                          title="Chuyển đổi giữa phân tích trọng tâm và phân tích chuyên sâu"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
                         >
-                          {answerStyle === 'concise' ? '⚡ Nhanh / Trọng tâm' : '🔬 Chi tiết / Chuyên sâu'}
+                          {answerStyle === 'concise' ? <Zap size={13} /> : <BookOpen size={13} />}
+                          <span>{answerStyle === 'concise' ? 'Nhanh / Trọng tâm' : 'Chi tiết / Chuyên sâu'}</span>
                         </button>
-
-                        {/* AI Model Selector */}
-                        <select
-                          value={selectedModel}
-                          onChange={e => {
-                            setSelectedModel(e.target.value);
-                            const label = e.target.value === 'auto'
-                              ? 'Tự động'
-                              : availableModels.find(m => m.id === e.target.value)?.label || e.target.value;
-                            notify(`Đã chọn model AI: ${label}`);
-                          }}
-                          className="model-selector-chip"
-                          title="Chọn model AI để trả lời câu hỏi"
-                        >
-                          <option value="auto">🤖 Tự động</option>
-                          {availableModels.map(m => (
-                            <option key={m.id} value={m.id}>
-                              {m.provider === 'gemini' ? '✦' : m.provider === 'openai' ? '◐' : m.provider === 'anthropic' ? '◈' : '⚡'}{' '}
-                              {m.label}
-                            </option>
-                          ))}
-                        </select>
                       </div>
                       <div className="chat-compose-actions">
                         <button
@@ -1656,9 +1809,10 @@ function CourseDetailContent() {
                           className="clear-chat-btn"
                           onClick={handleClearChat}
                           disabled={chat.length <= 1 || loading}
-                          title="Xóa toàn bộ lịch sử trò chuyện môn học (yêu cầu xác nhận)"
+                          title="Xóa toàn bộ lịch sử trò chuyện môn học"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
                         >
-                          <span style={{ fontSize: '13px' }}>🗑</span>
+                          <Trash2 size={13} />
                           <span>Xóa lịch sử</span>
                         </button>
                         {loading ? (
@@ -1671,7 +1825,7 @@ function CourseDetailContent() {
                               border: 'none',
                               padding: '0.5rem 1.1rem',
                               borderRadius: '10px',
-                              fontWeight: 700,
+                              fontWeight: 600,
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '6px',
@@ -1679,14 +1833,20 @@ function CourseDetailContent() {
                               boxShadow: '0 2px 10px rgba(239, 68, 68, 0.4)',
                               transition: 'all 0.2s ease',
                             }}
-                            title="Dừng câu trả lời của AI ngay lập tức"
+                            title="Dừng phản hồi"
                           >
-                            <span style={{ fontSize: '11px' }}>■</span>
+                            <Square size={12} fill="currentColor" />
                             <span>Dừng</span>
                           </button>
                         ) : (
-                          <button onClick={() => void ask()} disabled={!input.trim()}>
-                            Gửi <b>↑</b>
+                          <button
+                            className="chat-send-btn"
+                            onClick={() => void ask()}
+                            disabled={!input.trim()}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                          >
+                            <span>Gửi</span>
+                            <Send size={14} />
                           </button>
                         )}
                       </div>
@@ -1727,15 +1887,20 @@ function CourseDetailContent() {
       </section>
 
       {/* Toast */}
-      {toast && <div className="toast">✓ {toast}</div>}
+      {toast && <div className="toast" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}><CheckCircle2 size={15} /> {toast}</div>}
 
       {/* Profile Modal */}
       {profile && (
         <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && setProfile(false)}>
           <section className="modal">
             <header>
-              <h2>Tài khoản học viên</h2>
-              <button onClick={() => setProfile(false)}>×</button>
+              <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <User size={18} />
+                Tài khoản học viên
+              </h2>
+              <button onClick={() => setProfile(false)} title="Đóng">
+                <X size={16} />
+              </button>
             </header>
             <div className="profile-modal">
               <span className="profile-avatar large">
@@ -1751,12 +1916,17 @@ function CourseDetailContent() {
                 <button
                   onClick={() => {
                     setProfile(false);
-                    notify('Hồ sơ đang dùng dữ liệu tài khoản đăng nhập');
+                    notify('Hồ sơ sử dụng thông tin tài khoản đăng nhập');
                   }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                 >
+                  <ShieldCheck size={14} />
                   Thông tin tài khoản
                 </button>
-                <a href="/login">Đăng nhập lại</a>
+                <a href="/login" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <ExternalLink size={14} />
+                  Đăng nhập lại
+                </a>
               </div>
             </div>
           </section>
@@ -1819,12 +1989,12 @@ function CourseDetailContent() {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    fontSize: '20px',
                     flexShrink: 0,
                     boxShadow: '0 4px 14px rgba(124, 109, 242, 0.45)',
+                    color: '#fff',
                   }}
                 >
-                  📊
+                  <BarChart3 size={20} />
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1880,7 +2050,7 @@ function CourseDetailContent() {
                 }}
                 title="Đóng bảng điểm (Esc)"
               >
-                ✕
+                <X size={15} />
               </button>
             </div>
 
@@ -1904,12 +2074,12 @@ function CourseDetailContent() {
                     color: '#94a3b8',
                   }}
                 >
-                  <span style={{ fontSize: '42px', display: 'block', marginBottom: '0.85rem' }}>📝</span>
+                  <FileText size={40} style={{ margin: '0 auto 0.85rem', color: '#64748b' }} />
                   <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#f1f5f9' }}>
                     Chưa có đầu điểm nào cho môn học này
                   </h4>
                   <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#64748b' }}>
-                    Điểm các bài kiểm tra, bài thi và nhận xét trên Moodle của môn {activeCourse.name} sẽ tự động hiển thị ở đây khi được chấm.
+                    Điểm các bài kiểm tra, bài thi và nhận xét trên LMS của môn {activeCourse.name} sẽ tự động hiển thị ở đây khi được cập nhật.
                   </p>
                 </div>
               ) : (
@@ -1946,18 +2116,18 @@ function CourseDetailContent() {
                       </div>
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                        <span style={{ fontSize: '11.5px', color: '#94a3b8' }}>
-                          📅{' '}
+                        <span style={{ fontSize: '11.5px', color: '#94a3b8', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <Calendar size={12} />
                           {res.gradedAt
                             ? new Date(res.gradedAt).toLocaleDateString('vi-VN', {
                                 day: '2-digit',
                                 month: '2-digit',
                                 year: 'numeric',
                               })
-                            : 'Moodle'}
+                            : 'LMS'}
                         </span>
                         <span className={`result-status-tag ${res.passed ? 'pass' : 'fail'}`}>
-                          {res.passed ? '✓ Đạt' : '✕ Cần cải thiện'} (
+                          {res.passed ? 'Đạt' : 'Cần cải thiện'} (
                           {res.percentage || `${Math.round((res.score / res.maxScore) * 100)}%`})
                         </span>
                       </div>
@@ -1966,7 +2136,7 @@ function CourseDetailContent() {
                     {/* Row 2: Score + Progress track */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: '12px', color: '#94a3b8' }}>Điểm đạt được:</span>
+                        <span style={{ fontSize: '12px', color: '#94a3b8' }}>Điểm số:</span>
                         <div>
                           <span
                             style={{
@@ -2012,9 +2182,13 @@ function CourseDetailContent() {
                             color: '#c4b5fd',
                             textTransform: 'uppercase',
                             letterSpacing: '0.4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '5px',
                           }}
                         >
-                          💬 Nhận xét của Giảng viên:
+                          <MessageSquare size={13} />
+                          Nhận xét của Giảng viên:
                         </span>
                         <p
                           style={{
@@ -2042,8 +2216,8 @@ function CourseDetailContent() {
                           color: '#94a3b8',
                         }}
                       >
-                        <span style={{ fontWeight: 600, color: '#a5b4fc' }}>💬 Nhận xét:</span>
-                        <span style={{ color: '#cbd5e1', fontWeight: 600 }}>-</span>
+                        <span style={{ fontWeight: 600, color: '#a5b4fc' }}>Nhận xét:</span>
+                        <span style={{ color: '#cbd5e1', fontWeight: 600 }}>Chưa có nhận xét riêng</span>
                       </div>
                     )}
 
@@ -2063,20 +2237,22 @@ function CourseDetailContent() {
                           target="_blank"
                           rel="noreferrer"
                           className="result-action-link"
-                          style={{ fontSize: '11px', padding: '0.4rem 0.85rem' }}
-                          title="Mở trực tiếp trên Moodle"
+                          style={{ fontSize: '11px', padding: '0.4rem 0.85rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                          title="Mở trực tiếp trên LMS"
                         >
-                          Moodle ↗
+                          <span>Mở trên LMS</span>
+                          <ExternalLink size={11} />
                         </a>
                       )}
                       <button
                         type="button"
                         className="result-ai-btn"
-                        style={{ fontSize: '11.5px', padding: '0.4rem 0.95rem' }}
+                        style={{ fontSize: '11.5px', padding: '0.4rem 0.95rem', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
                         onClick={() => handleAskAiAboutGrade(res)}
-                        title="Đưa bài thi vào ô hỏi Gia sư AI"
+                        title="Hướng dẫn ôn tập phần kiến thức này"
                       >
-                        ✦ Hỏi AI về bài này
+                        <Sparkles size={13} />
+                        <span>Hướng dẫn ôn tập</span>
                       </button>
                     </div>
                   </div>
@@ -2097,26 +2273,419 @@ function CourseDetailContent() {
               }}
             >
               <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-                {courseExamResults.length} bài thi / kiểm tra của môn này
+                Tổng cộng {courseExamResults.length} đầu điểm môn học
               </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Student Document & Resource Upload Modal */}
+      {showUploadModal && (
+        <div
+          className="teacher-modal-backdrop"
+          onClick={() => {
+            if (!uploadLoading) setShowUploadModal(false);
+          }}
+        >
+          <div
+            className="teacher-modal-panel"
+            style={{ width: 'min(100%, 640px)', padding: 0 }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div
+              style={{
+                padding: '1.25rem 1.5rem',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                background: 'rgba(20, 18, 34, 0.95)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '10px',
+                    background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fff',
+                    flexShrink: 0,
+                  }}
+                >
+                  <UploadCloud size={18} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#f3f2f8', fontWeight: 700 }}>
+                    Thêm Nguồn Tài Liệu Học Tập
+                  </h3>
+                  <p style={{ margin: '0.15rem 0 0', fontSize: '0.8rem', color: '#9894ad' }}>
+                    Nạp tài liệu môn học để Gia sư AI và các công cụ học tập hỗ trợ phân tích
+                  </p>
+                </div>
+              </div>
               <button
                 type="button"
-                onClick={() => setShowGradeHistory(false)}
-                style={{
-                  padding: '7px 16px',
-                  borderRadius: '8px',
-                  background: 'rgba(255, 255, 255, 0.06)',
-                  border: '1px solid rgba(255, 255, 255, 0.12)',
-                  color: '#e2e8f0',
-                  fontSize: '12.5px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease',
+                onClick={() => {
+                  if (!uploadLoading) setShowUploadModal(false);
                 }}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#9894ad',
+                  fontSize: '1.25rem',
+                  cursor: 'pointer',
+                  padding: '0.3rem 0.5rem',
+                  borderRadius: '6px',
+                }}
+                aria-label="Đóng"
               >
-                ✕ Đóng bảng điểm
+                ✕
               </button>
             </div>
+
+            {/* Modal Body */}
+            <form onSubmit={handleUploadSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+              <div style={{ padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+                {/* 3 Mode Tabs */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    background: '#141220',
+                    padding: '4px',
+                    borderRadius: '10px',
+                    border: '1px solid #26233a',
+                    gap: '4px',
+                  }}
+                >
+                  {[
+                    { id: 'file', label: 'Tải tệp lên', icon: FileText, desc: 'PDF, Word, PPTX, TXT' },
+                    { id: 'url', label: 'Liên kết Web', icon: Globe, desc: 'URL, Bài viết, Tài liệu' },
+                    { id: 'text', label: 'Ghi chú nhanh', icon: BookOpen, desc: 'Dán trực tiếp văn bản' },
+                  ].map(tab => {
+                    const isSelected = uploadTab === tab.id;
+                    const Icon = tab.icon;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setUploadTab(tab.id as 'file' | 'url' | 'text')}
+                        style={{
+                          padding: '0.6rem 0.5rem',
+                          borderRadius: '8px',
+                          border: isSelected ? '1px solid rgba(124, 109, 242, 0.5)' : '1px solid transparent',
+                          background: isSelected ? 'rgba(124, 109, 242, 0.2)' : 'transparent',
+                          color: isSelected ? '#ffffff' : '#9894ad',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px',
+                          fontSize: '0.85rem',
+                          fontWeight: isSelected ? 600 : 500,
+                          transition: 'all 0.2s ease',
+                        }}
+                      >
+                        <Icon size={15} style={{ color: isSelected ? '#a594fd' : '#71717a' }} />
+                        <span>{tab.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Tab 1: File Upload Dropzone */}
+                {uploadTab === 'file' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    <div
+                      onDragOver={e => {
+                        e.preventDefault();
+                        setUploadDragActive(true);
+                      }}
+                      onDragLeave={() => setUploadDragActive(false)}
+                      onDrop={e => {
+                        e.preventDefault();
+                        setUploadDragActive(false);
+                        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                          setUploadFile(e.dataTransfer.files[0]);
+                          if (!uploadFileTitle) {
+                            setUploadFileTitle(e.dataTransfer.files[0].name.replace(/\.[^/.]+$/, ''));
+                          }
+                        }
+                      }}
+                      onClick={() => uploadFileInputRef.current?.click()}
+                      style={{
+                        padding: '1.75rem 1.25rem',
+                        border: uploadDragActive ? '2px dashed #7c6df2' : '2px dashed rgba(124, 109, 242, 0.4)',
+                        borderRadius: '12px',
+                        background: uploadDragActive ? 'rgba(124, 109, 242, 0.15)' : 'rgba(20, 18, 34, 0.6)',
+                        textAlign: 'center',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.4rem',
+                      }}
+                    >
+                      <input
+                        ref={uploadFileInputRef}
+                        type="file"
+                        accept=".pdf,.docx,.doc,.pptx,.ppt,.txt"
+                        style={{ display: 'none' }}
+                        onChange={e => {
+                          if (e.target.files && e.target.files[0]) {
+                            const f = e.target.files[0];
+                            setUploadFile(f);
+                            if (!uploadFileTitle) {
+                              setUploadFileTitle(f.name.replace(/\.[^/.]+$/, ''));
+                            }
+                          }
+                        }}
+                      />
+
+                      {uploadFile ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', width: '100%', maxWidth: '380px', padding: '0.65rem 0.85rem', background: '#141220', borderRadius: '10px', border: '1px solid rgba(124, 109, 242, 0.35)' }} onClick={e => e.stopPropagation()}>
+                          <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'rgba(124, 109, 242, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a594fd', flexShrink: 0 }}>
+                            <FileText size={18} />
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                            <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#f3f2f8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {uploadFile.name}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: '#9894ad' }}>
+                              {(uploadFile.size / (1024 * 1024)).toFixed(2)} MB
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setUploadFile(null);
+                              setUploadFileTitle('');
+                            }}
+                            style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px', fontSize: '1rem' }}
+                            title="Xóa tệp đã chọn"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ width: '44px', height: '44px', borderRadius: '50%', background: 'rgba(124, 109, 242, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a594fd', marginBottom: '0.2rem' }}>
+                            <UploadCloud size={24} />
+                          </div>
+                          <strong style={{ fontSize: '0.92rem', color: '#f3f2f8' }}>
+                            Kéo thả tài liệu vào đây hoặc nhấp để chọn tệp
+                          </strong>
+                          <p style={{ margin: 0, fontSize: '0.78rem', color: '#9894ad' }}>
+                            Hỗ trợ các định dạng: PDF, Word (.docx, .doc), PowerPoint (.pptx, .ppt), TXT
+                          </p>
+                        </>
+                      )}
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                        Tên hiển thị tài liệu (Tùy chọn):
+                      </label>
+                      <input
+                        type="text"
+                        value={uploadFileTitle}
+                        onChange={e => setUploadFileTitle(e.target.value)}
+                        placeholder="VD: Giáo trình Chương 3 - Cấu trúc dữ liệu..."
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem 0.85rem',
+                          borderRadius: '8px',
+                          background: '#141220',
+                          color: '#f3f2f8',
+                          border: '1px solid #26233a',
+                          fontSize: '16px',
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 2: Web URL */}
+                {uploadTab === 'url' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                        Địa chỉ liên kết Web (URL): <span style={{ color: '#ef4444' }}>*</span>
+                      </label>
+                      <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                        <Globe size={16} style={{ position: 'absolute', left: '12px', color: '#9894ad' }} />
+                        <input
+                          type="url"
+                          value={uploadUrl}
+                          onChange={e => setUploadUrl(e.target.value)}
+                          placeholder="https://example.com/tai-lieu-hoc-tap"
+                          required
+                          style={{
+                            width: '100%',
+                            padding: '0.65rem 0.85rem 0.65rem 36px',
+                            borderRadius: '8px',
+                            background: '#141220',
+                            color: '#f3f2f8',
+                            border: '1px solid #26233a',
+                            fontSize: '16px',
+                            outline: 'none',
+                            boxSizing: 'border-box',
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                        Tiêu đề liên kết / Tên tài liệu:
+                      </label>
+                      <input
+                        type="text"
+                        value={uploadUrlTitle}
+                        onChange={e => setUploadUrlTitle(e.target.value)}
+                        placeholder="VD: Tài liệu tham khảo chính thức..."
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem 0.85rem',
+                          borderRadius: '8px',
+                          background: '#141220',
+                          color: '#f3f2f8',
+                          border: '1px solid #26233a',
+                          fontSize: '16px',
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 3: Text Note */}
+                {uploadTab === 'text' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                        Tiêu đề ghi chú:
+                      </label>
+                      <input
+                        type="text"
+                        value={uploadTextTitle}
+                        onChange={e => setUploadTextTitle(e.target.value)}
+                        placeholder="VD: Tóm tắt bài giảng tuần 4..."
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem 0.85rem',
+                          borderRadius: '8px',
+                          background: '#141220',
+                          color: '#f3f2f8',
+                          border: '1px solid #26233a',
+                          fontSize: '16px',
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                        Nội dung bài học / Ghi chép: <span style={{ color: '#ef4444' }}>*</span>
+                      </label>
+                      <textarea
+                        rows={6}
+                        value={uploadTextContent}
+                        onChange={e => setUploadTextContent(e.target.value)}
+                        placeholder="Dán nội dung bài học, định nghĩa, ghi chép cá nhân vào đây..."
+                        required
+                        style={{
+                          width: '100%',
+                          padding: '0.75rem',
+                          borderRadius: '8px',
+                          background: '#141220',
+                          color: '#f3f2f8',
+                          border: '1px solid #26233a',
+                          fontSize: '16px',
+                          outline: 'none',
+                          resize: 'vertical',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div
+                style={{
+                  padding: '1rem 1.5rem',
+                  borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                  gap: '0.75rem',
+                  background: 'rgba(0, 0, 0, 0.25)',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setShowUploadModal(false)}
+                  disabled={uploadLoading}
+                  style={{
+                    padding: '0.55rem 1.15rem',
+                    borderRadius: '8px',
+                    border: '1px solid #26233a',
+                    background: 'transparent',
+                    color: '#9894ad',
+                    fontWeight: 600,
+                    fontSize: '0.88rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={uploadLoading}
+                  style={{
+                    padding: '0.55rem 1.35rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
+                    color: '#ffffff',
+                    fontWeight: 700,
+                    fontSize: '0.88rem',
+                    cursor: uploadLoading ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 4px 14px rgba(124, 109, 242, 0.4)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    opacity: uploadLoading ? 0.7 : 1,
+                  }}
+                >
+                  {uploadLoading ? (
+                    <>
+                      <Sparkles size={14} />
+                      <span>Đang xử lý tài liệu...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check size={14} />
+                      <span>Thêm vào tài liệu môn học</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -2132,7 +2701,9 @@ export default function CoursePage() {
       fallback={
         <div className="workspace-page fade-in" style={{ padding: '2rem' }}>
           <div className="artifact artifact-loading">
-            <span className="bot-avatar">✦</span>
+            <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Sparkles size={16} />
+            </span>
             <h3>Đang tải không gian môn học…</h3>
           </div>
         </div>

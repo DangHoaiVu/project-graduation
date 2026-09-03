@@ -1,6 +1,7 @@
 'use client';
 
 import type { CSSProperties } from 'react';
+import { GraduationCap, BookOpen, Clock, Settings, Sparkles, ArrowRight } from 'lucide-react';
 import type { Course } from '@/app/types';
 
 export interface CourseCardProps {
@@ -32,7 +33,9 @@ export function CourseCard({ course: c, onOpen, onOpenTeacher }: CourseCardProps
       <div className="course-card-inner">
         <div className="course-card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <span className="course-card-badge">✦</span>
+            <span className="course-card-badge" style={{ display: 'inline-flex', alignItems: 'center' }}>
+              <Sparkles size={12} />
+            </span>
             <span
               style={{
                 fontSize: '11px',
@@ -58,18 +61,19 @@ export function CourseCard({ course: c, onOpen, onOpenTeacher }: CourseCardProps
               letterSpacing: '0.3px',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '3px',
+              gap: '4px',
             }}
           >
-            <span>{isTeacher ? '🎓' : '📚'}</span>
+            {isTeacher ? <GraduationCap size={12} /> : <BookOpen size={12} />}
             <span>{isTeacher ? 'Giảng dạy' : 'Học tập'}</span>
           </span>
         </div>
 
         <div className="course-body">
           <h3>{c.name}</h3>
-          <p>
-            <span>◷</span> {c.next || 'Xem nội dung khóa học'}
+          <p style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <Clock size={12} style={{ opacity: 0.7 }} />
+            <span>{c.next || 'Xem nội dung khóa học'}</span>
           </p>
 
           <div style={{ marginTop: '0.75rem' }}>
@@ -81,15 +85,23 @@ export function CourseCard({ course: c, onOpen, onOpenTeacher }: CourseCardProps
                   if (onOpenTeacher) onOpenTeacher(c);
                   else onOpen();
                 }}
-                title="Mở Bảng điểm & Lò ấp Quiz Moodle"
+                title="Mở Bảng điểm & Tạo đề Moodle XML"
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '0 18px' }}
               >
-                <span>⚙️ Điểm &amp; Quiz</span>
-                <b>→</b>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <Settings size={13} />
+                  <span>Điểm &amp; Quiz</span>
+                </span>
+                <ArrowRight size={13} />
               </button>
             ) : (
-              <button className="liquid-glass-btn" onClick={onOpen}>
+              <button
+                className="liquid-glass-btn"
+                onClick={onOpen}
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '0 18px' }}
+              >
                 <span>Tiếp tục học</span>
-                <b>→</b>
+                <ArrowRight size={13} />
               </button>
             )}
           </div>

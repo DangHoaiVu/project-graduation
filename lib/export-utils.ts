@@ -77,12 +77,76 @@ export async function exportSummaryToDocx(
   URL.revokeObjectURL(url);
 }
 
-export async function exportElementToPng(element: HTMLElement, filename: string) {
+export interface ExportPngOptions {
+  cropToNodes?: boolean;
+  padding?: number;
+  backgroundColor?: string;
+  pixelRatio?: number;
+}
+
+export async function exportElementToPng(
+  element: HTMLElement,
+  filename: string,
+  options?: ExportPngOptions
+) {
   try {
+    const padding = options?.padding ?? 40;
+    const backgroundColor = options?.backgroundColor ?? '#0c0a1f';
+    const pixelRatio = options?.pixelRatio ?? 2;
+
+    let width: number | undefined;
+    let height: number | undefined;
+    let customStyle: Record<string, string> | undefined;
+
+    if (options?.cropToNodes) {
+      const nodeElements = element.querySelectorAll<HTMLElement>('.notebook-node');
+      if (nodeElements.length > 0) {
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+
+        nodeElements.forEach(el => {
+          const left = el.offsetLeft;
+          const top = el.offsetTop;
+          const elWidth = el.offsetWidth;
+          const elHeight = el.offsetHeight;
+
+          if (left < minX) minX = left;
+          if (top < minY) minY = top;
+          if (left + elWidth > maxX) maxX = left + elWidth;
+          if (top + elHeight > maxY) maxY = top + elHeight;
+        });
+
+        if (minX !== Infinity && maxX > minX && minY !== Infinity && maxY > minY) {
+          const contentWidth = maxX - minX;
+          const contentHeight = maxY - minY;
+          const exportWidth = Math.ceil(contentWidth + padding * 2);
+          const exportHeight = Math.ceil(contentHeight + padding * 2);
+
+          width = exportWidth;
+          height = exportHeight;
+          customStyle = {
+            transform: `translate(${-minX + padding}px, ${-minY + padding}px) scale(1)`,
+            transformOrigin: '0 0',
+            width: `${exportWidth}px`,
+            height: `${exportHeight}px`,
+            minHeight: `${exportHeight}px`,
+            left: '0px',
+            top: '0px',
+            margin: '0px',
+          };
+        }
+      }
+    }
+
     const dataUrl = await toPng(element, {
       quality: 0.98,
-      backgroundColor: '#0c0a1f',
-      pixelRatio: 2,
+      backgroundColor,
+      pixelRatio,
+      ...(width ? { width } : {}),
+      ...(height ? { height } : {}),
+      ...(customStyle ? { style: customStyle } : {}),
     });
     const a = document.createElement('a');
     a.href = dataUrl;

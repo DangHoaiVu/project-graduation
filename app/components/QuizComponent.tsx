@@ -1,6 +1,24 @@
 'use client';
 
 import React, { useState } from 'react';
+import {
+  Sparkles,
+  RotateCcw,
+  Sliders,
+  Printer,
+  ChevronLeft,
+  ChevronRight,
+  CheckCircle2,
+  XCircle,
+  Lightbulb,
+  CheckSquare,
+  Globe,
+  Lock,
+  BookOpen,
+  HelpCircle,
+  Award,
+  BookX,
+} from 'lucide-react';
 import { QuizQuestion } from '@/app/api/quiz/route';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
 
@@ -239,8 +257,11 @@ export function QuizComponent({
               className={`level-card ${difficulty === 'easy' ? 'active' : ''}`}
               onClick={() => setDifficulty('easy')}
             >
-              <strong>🟢 Dễ (Easy)</strong>
-              <small>Nhận biết khái niệm, định nghĩa cơ bản trực tiếp</small>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <BookOpen size={14} />
+                Cơ bản (Easy)
+              </strong>
+              <small>Nhận biết khái niệm, định nghĩa và nguyên lý trực tiếp</small>
             </button>
 
             <button
@@ -248,8 +269,11 @@ export function QuizComponent({
               className={`level-card ${difficulty === 'normal' ? 'active' : ''}`}
               onClick={() => setDifficulty('normal')}
             >
-              <strong>🟡 Trung bình (Normal)</strong>
-              <small>Hiểu bản chất &amp; vận dụng lý thuyết cân đối</small>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <HelpCircle size={14} />
+                Trung bình (Normal)
+              </strong>
+              <small>Thông hiểu bản chất và vận dụng lý thuyết cân đối</small>
             </button>
 
             <button
@@ -257,8 +281,11 @@ export function QuizComponent({
               className={`level-card ${difficulty === 'hard' ? 'active' : ''}`}
               onClick={() => setDifficulty('hard')}
             >
-              <strong>🔴 Khó (Hard)</strong>
-              <small>Vận dụng cao, phân tích tình huống &amp; bẫy trắc nghiệm</small>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Sparkles size={14} />
+                Nâng cao (Hard)
+              </strong>
+              <small>Vận dụng cao, giải quyết tình huống thực tế và phân tích sâu</small>
             </button>
           </div>
         </div>
@@ -272,8 +299,11 @@ export function QuizComponent({
               className={`level-card ${questionType === 'multiple_choice' ? 'active' : ''}`}
               onClick={() => setQuestionType('multiple_choice')}
             >
-              <strong>🔤 4 Lựa chọn (A/B/C/D)</strong>
-              <small>Chuẩn trắc nghiệm 1 đáp án đúng truyền thống</small>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <HelpCircle size={14} />
+                4 Lựa chọn (A/B/C/D)
+              </strong>
+              <small>Trắc nghiệm tiêu chuẩn 1 đáp án đúng</small>
             </button>
 
             <button
@@ -281,8 +311,11 @@ export function QuizComponent({
               className={`level-card ${questionType === 'true_false' ? 'active' : ''}`}
               onClick={() => setQuestionType('true_false')}
             >
-              <strong>⚖️ Đúng / Sai (True/False)</strong>
-              <small>Phán đoán tính đúng sai của các nhận định</small>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <BookX size={14} />
+                Đúng / Sai (True/False)
+              </strong>
+              <small>Đánh giá tính chính xác của các mệnh đề khoa học</small>
             </button>
 
             <button
@@ -290,8 +323,11 @@ export function QuizComponent({
               className={`level-card ${questionType === 'multiple_select' ? 'active' : ''}`}
               onClick={() => setQuestionType('multiple_select')}
             >
-              <strong>☑️ Chọn nhiều đáp án</strong>
-              <small>Câu hỏi có từ 2 đến 3 đáp án đúng (Multi-answer)</small>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <CheckSquare size={14} />
+                Nhiều đáp án đúng
+              </strong>
+              <small>Câu hỏi có từ 2 đến 3 đáp án đúng đồng thời</small>
             </button>
 
             <button
@@ -299,8 +335,11 @@ export function QuizComponent({
               className={`level-card ${questionType === 'mixed' ? 'active' : ''}`}
               onClick={() => setQuestionType('mixed')}
             >
-              <strong>🔀 Kết hợp (Mixed)</strong>
-              <small>Xen kẽ cả 1 lựa chọn, Đúng/Sai &amp; Nhiều đáp án</small>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Sparkles size={14} />
+                Tổng hợp (Mixed)
+              </strong>
+              <small>Phân bổ xen kẽ các dạng thức câu hỏi đa dạng</small>
             </button>
           </div>
         </div>
@@ -318,7 +357,7 @@ export function QuizComponent({
 
         {/* Section 5: External Knowledge Option */}
         <div>
-          <div className="tool-section-label">5. NGUỒN KIẾN THỨC MỞ RỘNG (EXTERNAL SOURCE)</div>
+          <div className="tool-section-label">5. PHẠM VI NỘI DUNG RA ĐỀ</div>
           <button
             type="button"
             className={`level-card ${allowExternal ? 'active' : ''}`}
@@ -326,15 +365,18 @@ export function QuizComponent({
             style={{ width: '100%' }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <strong>{allowExternal ? '🌐 Đang bật: Cho phép câu hỏi thực tiễn mở rộng' : '🔒 Đang tắt: Bám sát tài liệu được cung cấp'}</strong>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {allowExternal ? <Globe size={15} /> : <Lock size={15} />}
+                {allowExternal ? 'Cho phép câu hỏi liên hệ thực tiễn ngoài giáo trình' : 'Bám sát nghiêm ngặt tài liệu được cung cấp'}
+              </strong>
               <span className="level-badge" style={{ background: allowExternal ? 'rgba(56, 189, 248, 0.2)' : undefined }}>
                 {allowExternal ? 'BẬT' : 'TẮT'}
               </span>
             </div>
             <small>
               {allowExternal
-                ? 'Đề thi sẽ kết hợp thêm các câu hỏi tình huống thực tế trong ngành, ứng dụng hiện đại và câu hỏi mở rộng tư duy sáng tạo.'
-                : 'Đề thi chỉ tập trung 100% vào nội dung văn bản trong các tài liệu môn học đang chọn.'}
+                ? 'Đề thi tích hợp các câu hỏi tình huống thực tế trong ngành, ứng dụng hiện đại và câu hỏi tư duy mở rộng.'
+                : 'Đề thi tập trung hoàn toàn vào nội dung văn bản tài liệu môn học đã chọn.'}
             </small>
           </button>
         </div>
@@ -343,8 +385,10 @@ export function QuizComponent({
           type="button"
           className="generate-tool-btn"
           onClick={() => void handleStartQuiz()}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
         >
-          ✦ Bắt đầu làm bài trắc nghiệm ({questionCount} câu)
+          <Sparkles size={16} />
+          Bắt đầu làm bài trắc nghiệm ({questionCount} câu)
         </button>
       </div>
     );
@@ -374,38 +418,50 @@ export function QuizComponent({
       {/* Quiz Top Header */}
       <div className="artifact-head">
         <div>
-          <h2>Đề Trắc Nghiệm: {courseTitle}</h2>
+          <h2>Đề trắc nghiệm: {courseTitle}</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
             <span className="level-badge">
-              {difficulty === 'easy' ? '🟢 Dễ' : difficulty === 'hard' ? '🔴 Khó' : '🟡 Trung bình'}
+              {difficulty === 'easy' ? 'Cơ bản' : difficulty === 'hard' ? 'Nâng cao' : 'Trung bình'}
             </span>
             <span className="level-badge" style={{ background: 'rgba(56, 189, 248, 0.15)', borderColor: '#38bdf8', color: '#bae6fd' }}>
-              {questionType === 'true_false' ? '⚖️ Đúng/Sai' : questionType === 'multiple_select' ? '☑️ Nhiều đáp án' : questionType === 'mixed' ? '🔀 Kết hợp' : '🔤 4 Lựa chọn'}
+              {questionType === 'true_false' ? 'Đúng / Sai' : questionType === 'multiple_select' ? 'Nhiều đáp án' : questionType === 'mixed' ? 'Tổng hợp' : '4 Lựa chọn'}
             </span>
             <small style={{ color: '#94a3b8' }}>
-              Đã làm: {answeredCount}/{totalQuestions} câu
+              Đã hoàn thành: {answeredCount}/{totalQuestions} câu
             </small>
           </div>
         </div>
 
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-          <button className="reconfigure-btn" onClick={handleReconfigure}>
-            ⚙️ Đổi cấu hình đề
+          <button
+            className="reconfigure-btn"
+            onClick={handleReconfigure}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            <Sliders size={14} />
+            Cấu hình đề
           </button>
 
           {submitted && (
-            <button className="reconfigure-btn" onClick={handleRetake}>
-              🔄 Làm lại đề này
+            <button
+              className="reconfigure-btn"
+              onClick={handleRetake}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <RotateCcw size={14} />
+              Làm lại đề này
             </button>
           )}
 
           <button
             onClick={() => {
               window.print();
-              notify('Đã mở hộp thoại in / xuất PDF đề thi');
+              notify('Đã mở giao diện in / lưu PDF đề thi');
             }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >
-            ↓ In / PDF
+            <Printer size={14} />
+            In đề thi
           </button>
         </div>
       </div>
@@ -418,14 +474,25 @@ export function QuizComponent({
             <span className="score-sub">{correctCount}/{totalQuestions} đúng</span>
           </div>
           <div className="score-details">
-            <h3>
-              {scorePercent >= 85
-                ? '🌟 Xuất sắc! Bạn nắm rất vững kiến thức.'
-                : scorePercent >= 65
-                ? '👍 Khá tốt! Cần chú ý thêm các câu sai.'
-                : '📚 Hãy ôn tập lại tài liệu và làm lại nhé!'}
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {scorePercent >= 85 ? (
+                <>
+                  <Award size={20} style={{ color: '#fbbf24' }} />
+                  Kết quả xuất sắc: Nắm vững toàn diện kiến thức
+                </>
+              ) : scorePercent >= 65 ? (
+                <>
+                  <CheckCircle2 size={20} style={{ color: '#38bdf8' }} />
+                  Kết quả đạt yêu cầu: Cần rà soát thêm các câu sai
+                </>
+              ) : (
+                <>
+                  <BookOpen size={20} style={{ color: '#f87171' }} />
+                  Cần tiếp tục ôn tập và củng cố tài liệu bài giảng
+                </>
+              )}
             </h3>
-            <p>Bạn đã hoàn thành bài kiểm tra trắc nghiệm từ tài liệu môn học. Xem chi tiết giải thích đáp án bên dưới.</p>
+            <p>Bài thi trắc nghiệm đã hoàn thành. Hãy đối chiếu các câu trả lời và xem giải thích chi tiết bên dưới.</p>
           </div>
         </div>
       )}
@@ -453,7 +520,7 @@ export function QuizComponent({
                 fontWeight: 600,
               }}
             >
-              {isMultiSelect ? '☑️ Chọn nhiều đáp án đúng' : isTrueFalse ? '⚖️ Đúng / Sai' : '🔤 Chọn 1 đáp án đúng'}
+              {isMultiSelect ? 'Chọn nhiều đáp án đúng' : isTrueFalse ? 'Đúng / Sai' : 'Chọn 1 đáp án đúng'}
             </span>
           </div>
           {submitted && (
@@ -461,8 +528,10 @@ export function QuizComponent({
               className={`quiz-status-pill ${
                 isAnswerCorrect(currentQ, currentIdx) ? 'correct' : 'incorrect'
               }`}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
             >
-              {isAnswerCorrect(currentQ, currentIdx) ? '✓ Đúng' : '✗ Sai'}
+              {isAnswerCorrect(currentQ, currentIdx) ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+              {isAnswerCorrect(currentQ, currentIdx) ? 'Đúng' : 'Sai'}
             </span>
           )}
         </div>
@@ -490,7 +559,7 @@ export function QuizComponent({
               else if (isSelected && !isCorrect) choiceClass += ' wrong-answer';
             }
 
-            const prefix = isMultiSelect ? (isSelected ? '☑' : '☐') : String.fromCharCode(65 + cIdx); // A, B, C, D or checkbox
+            const prefix = isMultiSelect ? (isSelected ? '[✓]' : '[ ]') : String.fromCharCode(65 + cIdx);
 
             return (
               <button
@@ -502,8 +571,8 @@ export function QuizComponent({
               >
                 <span className="choice-prefix" style={{ fontSize: isMultiSelect ? '15px' : undefined }}>{prefix}</span>
                 <span className="choice-text">{choice}</span>
-                {submitted && isCorrect && <span className="choice-badge-check">✓ Đúng</span>}
-                {submitted && isSelected && !isCorrect && <span className="choice-badge-wrong">✗ Sai</span>}
+                {submitted && isCorrect && <span className="choice-badge-check">Đúng</span>}
+                {submitted && isSelected && !isCorrect && <span className="choice-badge-wrong">Sai</span>}
               </button>
             );
           })}
@@ -512,7 +581,10 @@ export function QuizComponent({
         {/* Explanation Box (Visible after submission) */}
         {submitted && currentQ.explanation && (
           <div className="quiz-explanation-box">
-            <div className="explanation-title">💡 Giải thích chi tiết:</div>
+            <div className="explanation-title" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Lightbulb size={15} style={{ color: '#fbbf24' }} />
+              <span>Giải thích chi tiết:</span>
+            </div>
             <div className="explanation-text">
               <MarkdownRenderer content={currentQ.explanation} />
             </div>
@@ -526,8 +598,10 @@ export function QuizComponent({
             className="reconfigure-btn"
             disabled={currentIdx === 0}
             onClick={() => setCurrentIdx(prev => Math.max(0, prev - 1))}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >
-            ← Câu trước
+            <ChevronLeft size={14} />
+            Câu trước
           </button>
 
           <div className="quiz-nav-dots">
@@ -559,10 +633,11 @@ export function QuizComponent({
             <button
               type="button"
               className="generate-tool-btn"
-              style={{ margin: 0, padding: '8px 16px', fontSize: '13px' }}
+              style={{ margin: 0, padding: '8px 16px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
               onClick={() => setCurrentIdx(prev => Math.min(totalQuestions - 1, prev + 1))}
             >
-              Câu tiếp theo →
+              <span>Câu tiếp theo</span>
+              <ChevronRight size={14} />
             </button>
           ) : !submitted ? (
             <button
@@ -573,18 +648,24 @@ export function QuizComponent({
                 padding: '8px 20px',
                 fontSize: '13px',
                 background: 'linear-gradient(135deg, #10b981, #059669)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
               }}
               onClick={handleSubmit}
             >
-              Nộp bài thi ✓
+              <CheckCircle2 size={15} />
+              <span>Nộp bài thi</span>
             </button>
           ) : (
             <button
               type="button"
               className="reconfigure-btn"
               onClick={handleReconfigure}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
             >
-              Hoàn thành
+              <CheckCircle2 size={14} />
+              <span>Hoàn thành</span>
             </button>
           )}
         </div>

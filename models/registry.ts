@@ -1,14 +1,13 @@
 import { runtimeEnv } from '@/db/runtime';
 import { getGeminiClient, GEMINI_MODEL, GEMINI_BACKUP_MODELS } from './gemini';
 import { getGroqClient, GROQ_MODEL, GROQ_BACKUP_MODELS } from './groq';
-import { getOpenAIClient, OPENAI_MODELS } from './openai';
 import { getAnthropicClient, ANTHROPIC_MODELS } from './anthropic';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type AIProvider = 'gemini' | 'groq' | 'openai' | 'anthropic';
+export type AIProvider = 'gemini' | 'groq' | 'anthropic';
 
 export interface ModelOption {
   /** Format: "provider:modelId" */
@@ -38,6 +37,64 @@ export interface GenerateTextResult {
 }
 
 // ---------------------------------------------------------------------------
+// Daily Quota Circuit Breaker
+// ---------------------------------------------------------------------------
+
+// Tracks timestamp (ms) until which a provider is blocked due to quota/credit exhaustion
+const providerBlockedUntil = new Map<AIProvider, number>();
+
+function getNextDayMidnight(): number {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 0, 0, 0);
+  return tomorrow.getTime();
+}
+
+export function isProviderBlocked(provider: AIProvider): boolean {
+  const unblockTime = providerBlockedUntil.get(provider);
+  if (!unblockTime) return false;
+  if (Date.now() >= unblockTime) {
+    providerBlockedUntil.delete(provider);
+    return false;
+  }
+  return true;
+}
+
+export function blockProviderUntilTomorrow(provider: AIProvider, reason?: string) {
+  const unblockTime = getNextDayMidnight();
+  providerBlockedUntil.set(provider, unblockTime);
+  const resetStr = new Date(unblockTime).toLocaleString();
+  console.warn(`[AI Circuit Breaker] Provider "${provider}" ran out of credits/quota (${reason || '429 / Quota exhausted'}). Skipping all calls to "${provider}" until tomorrow (${resetStr}).`);
+}
+
+export function isQuotaExhaustedError(err: unknown): boolean {
+  if (!err) return false;
+  const str = String(err).toLowerCase();
+  const msg = (err as { message?: string })?.message?.toLowerCase() || '';
+  const status = (err as { status?: number })?.status;
+  const code = String((err as { code?: string | number })?.code || '').toLowerCase();
+
+  if (status === 429) return true;
+  if (code.includes('insufficient_quota') || code.includes('credit_balance') || code.includes('resource_exhausted')) return true;
+
+  const quotaKeywords = [
+    'credit balance',
+    'insufficient_quota',
+    'resource_exhausted',
+    'rate limit',
+    'rate_limit',
+    'quota',
+    'too many requests',
+    '429',
+    'credit is too low',
+    'credits remaining',
+    'billing',
+  ];
+
+  return quotaKeywords.some(kw => str.includes(kw) || msg.includes(kw));
+}
+
+// ---------------------------------------------------------------------------
 // Available Models
 // ---------------------------------------------------------------------------
 
@@ -47,7 +104,7 @@ export function getAvailableModels(): ModelOption[] {
 
   // Gemini
   const geminiKey = env.GEMINI_API_KEY || env.GOOGLE_API_KEY || '';
-  const geminiAvailable = !!geminiKey && !geminiKey.startsWith('AIzaSy...');
+  const geminiAvailable = !!geminiKey && !geminiKey.startsWith('AIzaSy...') && !isProviderBlocked('gemini');
   const geminiModels = [GEMINI_MODEL, ...GEMINI_BACKUP_MODELS];
   const geminiLabels: Record<string, string> = {
     'gemini-2.5-flash': 'Gemini 2.5 Flash',
@@ -63,22 +120,9 @@ export function getAvailableModels(): ModelOption[] {
     });
   }
 
-  // OpenAI
-  const openaiKey = env.OPENAI_API_KEY || '';
-  const openaiAvailable = !!openaiKey && !openaiKey.startsWith('sk-proj-your');
-  for (const m of OPENAI_MODELS) {
-    models.push({
-      id: `openai:${m.id}`,
-      provider: 'openai',
-      modelId: m.id,
-      label: m.label,
-      available: openaiAvailable,
-    });
-  }
-
   // Anthropic
   const anthropicKey = env.ANTHROPIC_API_KEY || '';
-  const anthropicAvailable = !!anthropicKey && !anthropicKey.startsWith('sk-ant-your');
+  const anthropicAvailable = !!anthropicKey && !anthropicKey.startsWith('sk-ant-your') && !isProviderBlocked('anthropic');
   for (const m of ANTHROPIC_MODELS) {
     models.push({
       id: `anthropic:${m.id}`,
@@ -91,7 +135,7 @@ export function getAvailableModels(): ModelOption[] {
 
   // Groq
   const groqKey = env.GROQ_API_KEY || '';
-  const groqAvailable = !!groqKey && !groqKey.startsWith('gsk_your');
+  const groqAvailable = !!groqKey && !groqKey.startsWith('gsk_your') && !isProviderBlocked('groq');
   const groqModels = [GROQ_MODEL, ...GROQ_BACKUP_MODELS];
   const groqLabels: Record<string, string> = {
     'openai/gpt-oss-120b': 'Groq GPT-OSS 120B',
@@ -115,7 +159,7 @@ export function getAvailableModels(): ModelOption[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Parse a model selector string like "openai:gpt-4o" into provider and modelId.
+ * Parse a model selector string like "anthropic:claude-3-5-sonnet" into provider and modelId.
  * Returns null for 'auto' or invalid formats.
  */
 export function parseModelSelector(selector?: string): { provider: AIProvider; modelId: string } | null {
@@ -124,7 +168,7 @@ export function parseModelSelector(selector?: string): { provider: AIProvider; m
   if (idx <= 0) return null;
   const provider = selector.slice(0, idx) as AIProvider;
   const modelId = selector.slice(idx + 1);
-  if (!['gemini', 'groq', 'openai', 'anthropic'].includes(provider) || !modelId) return null;
+  if (!['gemini', 'groq', 'anthropic'].includes(provider) || !modelId) return null;
   return { provider, modelId };
 }
 
@@ -134,11 +178,12 @@ async function callProvider(
   modelId: string,
   opts: GenerateTextOptions
 ): Promise<GenerateTextResult | null> {
+  if (isProviderBlocked(provider)) {
+    return null;
+  }
   switch (provider) {
     case 'gemini':
       return callGemini(modelId, opts);
-    case 'openai':
-      return callOpenAI(modelId, opts);
     case 'anthropic':
       return callAnthropic(modelId, opts);
     case 'groq':
@@ -150,7 +195,7 @@ async function callProvider(
 
 /**
  * Generate text using a specific model or auto-fallback cascade.
- * Auto cascade: Gemini → OpenAI → Anthropic → Groq
+ * Auto cascade: Gemini → Anthropic → Groq
  */
 export async function generateText(
   modelSelector: string | undefined,
@@ -158,32 +203,41 @@ export async function generateText(
 ): Promise<GenerateTextResult> {
   const parsed = parseModelSelector(modelSelector);
 
-  // If a specific model is selected, try it (with backup models from the same provider)
-  if (parsed) {
+  // If a specific model is selected and not blocked, try it
+  if (parsed && !isProviderBlocked(parsed.provider)) {
     try {
       const result = await callProvider(parsed.provider, parsed.modelId, opts);
       if (result?.text) return result;
     } catch (err) {
+      if (isQuotaExhaustedError(err)) {
+        blockProviderUntilTomorrow(parsed.provider, String(err));
+      }
       console.warn(`Selected model ${modelSelector} failed:`, err);
     }
     // If the selected model fails, still try auto-fallback
     console.warn(`Selected model ${modelSelector} failed, falling back to auto cascade`);
   }
 
-  // Auto cascade: Gemini → OpenAI → Anthropic → Groq
+  // Auto cascade: Gemini → Anthropic → Groq
   const cascadeProviders: Array<{ provider: AIProvider; models: string[] }> = [
     { provider: 'gemini', models: [GEMINI_MODEL, ...GEMINI_BACKUP_MODELS] },
-    { provider: 'openai', models: OPENAI_MODELS.map(m => m.id) },
     { provider: 'anthropic', models: ANTHROPIC_MODELS.map(m => m.id) },
     { provider: 'groq', models: [GROQ_MODEL, ...GROQ_BACKUP_MODELS] },
   ];
 
   for (const { provider, models } of cascadeProviders) {
+    if (isProviderBlocked(provider)) {
+      continue; // Skip entire provider if blocked until tomorrow
+    }
     for (const modelId of models) {
       try {
         const result = await callProvider(provider, modelId, opts);
         if (result?.text) return result;
       } catch (err) {
+        if (isQuotaExhaustedError(err)) {
+          blockProviderUntilTomorrow(provider, String(err));
+          break; // Stop attempting other models from this exhausted provider
+        }
         console.warn(`Auto cascade: ${provider}:${modelId} failed:`, err);
       }
     }
@@ -247,49 +301,10 @@ async function callGemini(modelId: string, opts: GenerateTextOptions): Promise<G
     const groundingMetadata = (response as any).candidates?.[0]?.groundingMetadata || null;
     return { text, groundingMetadata };
   } catch (err) {
+    if (isQuotaExhaustedError(err)) {
+      blockProviderUntilTomorrow('gemini', String(err));
+    }
     console.warn(`callGemini (${modelId}) failed:`, err);
-    return null;
-  }
-}
-
-async function callOpenAI(modelId: string, opts: GenerateTextOptions): Promise<GenerateTextResult | null> {
-  const client = getOpenAIClient();
-  if (!client) {
-    console.warn('OpenAI client not available (check key)');
-    return null;
-  }
-
-  try {
-    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-      { role: 'system', content: opts.system },
-    ];
-
-    if (opts.history) {
-      for (const msg of opts.history) {
-        messages.push({ role: msg.role, content: msg.content });
-      }
-    }
-
-    messages.push({ role: 'user', content: opts.userPrompt });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const createOpts: any = {
-      model: modelId,
-      messages,
-      temperature: opts.temperature ?? 0.1,
-    };
-
-    if (opts.jsonMode) {
-      createOpts.response_format = { type: 'json_object' };
-    }
-
-    const completion = await client.chat.completions.create(createOpts);
-    const text = completion.choices[0]?.message?.content?.trim() || '';
-    if (!text) return null;
-
-    return { text };
-  } catch (err) {
-    console.warn(`callOpenAI (${modelId}) failed:`, err);
     return null;
   }
 }
@@ -332,6 +347,9 @@ async function callAnthropic(modelId: string, opts: GenerateTextOptions): Promis
 
     return { text };
   } catch (err) {
+    if (isQuotaExhaustedError(err)) {
+      blockProviderUntilTomorrow('anthropic', String(err));
+    }
     console.warn(`callAnthropic (${modelId}) failed:`, err);
     return null;
   }
@@ -374,6 +392,9 @@ async function callGroq(modelId: string, opts: GenerateTextOptions): Promise<Gen
 
     return { text };
   } catch (err) {
+    if (isQuotaExhaustedError(err)) {
+      blockProviderUntilTomorrow('groq', String(err));
+    }
     console.warn(`callGroq (${modelId}) failed:`, err);
     return null;
   }

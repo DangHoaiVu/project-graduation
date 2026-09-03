@@ -1,5 +1,5 @@
 import { getGeminiClient } from '@/models/gemini';
-import { getOpenAIClient } from '@/models/openai';
+import { isProviderBlocked, blockProviderUntilTomorrow, isQuotaExhaustedError } from '@/models/registry';
 
 export interface DocumentChunk {
   id: string;
@@ -239,54 +239,47 @@ function computeBM25Score(queryTokens: string[], chunkText: string): number {
 export async function generateEmbeddings(texts: string[]): Promise<Array<number[] | null>> {
   if (!texts || texts.length === 0) return [];
 
-  // 1. Try Gemini text-embedding-004
-  const gemini = getGeminiClient();
-  if (gemini) {
-    try {
-      const results: Array<number[] | null> = [];
-      // Process in small batches of 8 to prevent rate limit
-      for (let i = 0; i < texts.length; i += 8) {
-        const batch = texts.slice(i, i + 8);
-        const batchPromises = batch.map(async text => {
-          try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const res = await (gemini.models as any).embedContent({
-              model: 'text-embedding-004',
-              contents: text.slice(0, 2048),
-            });
-            return (res.embedding?.values as number[]) || null;
-          } catch {
-            return null;
-          }
-        });
-        const batchRes = await Promise.all(batchPromises);
-        results.push(...batchRes);
-      }
+  // 1. Try Gemini text-embedding-004 if not blocked
+  if (!isProviderBlocked('gemini')) {
+    const gemini = getGeminiClient();
+    if (gemini) {
+      try {
+        const results: Array<number[] | null> = [];
+        // Process in small batches of 8 to prevent rate limit
+        for (let i = 0; i < texts.length; i += 8) {
+          const batch = texts.slice(i, i + 8);
+          const batchPromises = batch.map(async text => {
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const res = await (gemini.models as any).embedContent({
+                model: 'text-embedding-004',
+                contents: text.slice(0, 2048),
+              });
+              return (res.embedding?.values as number[]) || null;
+            } catch (innerErr) {
+              if (isQuotaExhaustedError(innerErr)) {
+                blockProviderUntilTomorrow('gemini', 'Embedding quota exceeded');
+              }
+              return null;
+            }
+          });
+          const batchRes = await Promise.all(batchPromises);
+          results.push(...batchRes);
+        }
 
-      if (results.some(r => r !== null)) {
-        return results;
+        if (results.some(r => r !== null)) {
+          return results;
+        }
+      } catch (err) {
+        if (isQuotaExhaustedError(err)) {
+          blockProviderUntilTomorrow('gemini', String(err));
+        }
+        console.warn('Gemini embedding failed, falling back to BM25:', err);
       }
-    } catch (err) {
-      console.warn('Gemini embedding failed, trying OpenAI:', err);
     }
   }
 
-  // 2. Try OpenAI text-embedding-3-small
-  const openai = getOpenAIClient();
-  if (openai) {
-    try {
-      const cleanInputs = texts.map(t => t.slice(0, 4000) || 'empty');
-      const res = await openai.embeddings.create({
-        model: 'text-embedding-3-small',
-        input: cleanInputs,
-      });
-      return res.data.map(d => d.embedding);
-    } catch (err) {
-      console.warn('OpenAI embedding failed:', err);
-    }
-  }
-
-  // If no embedding API is reachable, return array of nulls (retrieval will seamlessly use BM25)
+  // If embedding API is unreachable, return array of nulls (retrieval will seamlessly use BM25)
   return texts.map(() => null);
 }
 

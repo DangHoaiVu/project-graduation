@@ -1,6 +1,38 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import {
+  Bot,
+  Table,
+  HelpCircle,
+  FileText,
+  BookOpen,
+  UploadCloud,
+  RefreshCw,
+  Send,
+  Trash2,
+  Copy,
+  Check,
+  Download,
+  Plus,
+  FileSpreadsheet,
+  Sparkles,
+  ExternalLink,
+  X,
+  Calendar,
+  Search,
+  Sliders,
+  CheckCircle2,
+  ChevronRight,
+  AlertCircle,
+  Users,
+  GraduationCap,
+  Square,
+  Globe,
+  Lock,
+  BookX,
+  CheckSquare,
+} from 'lucide-react';
 import type { Course, ChatMessage, CitationSource } from '@/app/types';
 import { convertQuestionsToMoodleXml, type QuizQuestionItem } from '@/app/lib/moodle-xml';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
@@ -106,7 +138,7 @@ export function TeacherPortal({
   const [quizCount, setQuizCount] = useState<number>(10);
   const [quizDifficulty, setQuizDifficulty] = useState<'easy' | 'normal' | 'hard'>('normal');
   const [quizQuestionType, setQuizQuestionType] = useState<'multiple_choice' | 'true_false' | 'multiple_select' | 'mixed'>('mixed');
-  const [quizModel, setQuizModel] = useState('gemini:gemini-2.5-flash');
+  const quizModel = 'auto';
   const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
   const [generatedQuestions, setGeneratedQuestions] = useState<QuizQuestionItem[]>([]);
   const [xmlContent, setXmlContent] = useState<string>('');
@@ -120,13 +152,7 @@ export function TeacherPortal({
   const [assistantChat, setAssistantChat] = useState<ChatMessage[]>([]);
   const [assistantInput, setAssistantInput] = useState('');
   const [assistantLoading, setAssistantLoading] = useState(false);
-  const [assistantModel, setAssistantModel] = useState('auto');
-  const [availableModels, setAvailableModels] = useState<Array<{ id: string; label: string }>>([
-    { id: 'auto', label: '⚡ Tự động tối ưu (Auto)' },
-    { id: 'gemini:gemini-2.5-flash', label: '⚡ Gemini 2.5 Flash' },
-    { id: 'gemini:gemini-2.5-pro', label: '🧠 Gemini 2.5 Pro' },
-    { id: 'openai:gpt-4o', label: '🌐 GPT-4o' },
-  ]);
+  const assistantModel = 'auto';
   const [copiedMsgIdx, setCopiedMsgIdx] = useState<number | null>(null);
   const assistantAbortRef = useRef<AbortController | null>(null);
   const chatMessagesEndRef = useRef<HTMLDivElement>(null);
@@ -137,26 +163,6 @@ export function TeacherPortal({
       chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [assistantChat, activeTab]);
-
-  // Load available models from API
-  useEffect(() => {
-    fetch('/api/models')
-      .then(res => res.json())
-      .then((data: any) => {
-        if (data && data.models && Array.isArray(data.models)) {
-          const activeList = data.models
-            .filter((m: { available: boolean }) => m.available)
-            .map((m: { id: string; label: string }) => ({ id: m.id, label: m.label }));
-          if (activeList.length > 0) {
-            setAvailableModels([
-              { id: 'auto', label: '⚡ Tự động tối ưu (Auto)' },
-              ...activeList,
-            ]);
-          }
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   // Fetch course students & grade columns whenever selected course changes
   useEffect(() => {
@@ -316,12 +322,12 @@ export function TeacherPortal({
   // Initialize Teacher Assistant welcome message
   useEffect(() => {
     const curCourse = courses.find(c => String(c.id) === String(selectedCourseId) || c.code === String(selectedCourseId));
-    const courseTitle = curCourse ? curCourse.name : 'môn học này';
+    const courseTitle = curCourse ? curCourse.name : 'môn học';
     if (assistantChat.length === 0) {
       setAssistantChat([
         {
           role: 'ai',
-          text: `Chào Thầy/Cô! Em là trợ lý AI môn **${courseTitle}**. Thầy/Cô có thể yêu cầu em tìm tài liệu học tập, soạn bài tập về nhà, lập kế hoạch bài giảng hoặc tạo câu hỏi thi cho môn học nhé!`,
+          text: `Trợ lý AI Giảng dạy môn **${courseTitle}** đã sẵn sàng. Bạn có thể yêu cầu đề xuất tài liệu học tập, soạn bài tập, lập kế hoạch bài giảng hoặc phân tích kết quả sổ điểm.`,
         },
       ]);
     }
@@ -419,7 +425,7 @@ export function TeacherPortal({
     setActiveTab('quiz');
     setQuizNotice({
       type: 'info',
-      message: '⚡ Đã chuyển nội dung câu hỏi từ Trợ lý AI sang Lò Ấp! Thầy/Cô có thể nhấp "Tạo Ngân Hàng Câu Hỏi Moodle XML" bên dưới để trích xuất XML.',
+      message: 'Đã chuyển nội dung câu hỏi từ Trợ lý AI sang trình tạo đề XML. Bạn có thể nhấp "Tạo Ngân Hàng Câu Hỏi Moodle XML" bên dưới để trích xuất XML.',
     });
   };
 
@@ -907,7 +913,21 @@ export function TeacherPortal({
         <div className="teacher-header-card">
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <span style={{ fontSize: '24px' }}>🎓</span>
+              <div
+                style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '10px',
+                  background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#fff',
+                  flexShrink: 0,
+                }}
+              >
+                <GraduationCap size={20} />
+              </div>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   <h1 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700, color: '#f3f2f8' }}>
@@ -930,15 +950,15 @@ export function TeacherPortal({
                         background: 'rgba(124, 109, 242, 0.15)',
                         border: '1px solid rgba(124, 109, 242, 0.3)',
                       }}
-                      title="Mở khóa học trên Moodle"
+                      title="Mở khóa học trên LMS"
                     >
                       <span>Xem trên Moodle</span>
-                      <span style={{ fontSize: '10px' }}>↗</span>
+                      <ExternalLink size={10} />
                     </a>
                   )}
                 </div>
                 <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: '#9894ad' }}>
-                  Vũ khí AI tự động hóa: Hút điểm đa định dạng vào Moodle &amp; Lò ấp đề thi trắc nghiệm XML
+                  Hệ thống hỗ trợ nhập điểm tự động và khởi tạo ngân hàng đề thi chuẩn Moodle XML
                 </p>
               </div>
             </div>
@@ -967,7 +987,7 @@ export function TeacherPortal({
                 return (
                   <>
                     {teaching.length > 0 && (
-                      <optgroup label="🎓 Khóa học bạn giảng dạy">
+                      <optgroup label="Khóa học bạn giảng dạy">
                         {teaching.map(c => (
                           <option key={c.id || c.code} value={c.id || c.code}>
                             {c.name} ({c.code})
@@ -976,7 +996,7 @@ export function TeacherPortal({
                       </optgroup>
                     )}
                     {other.length > 0 && (
-                      <optgroup label={teaching.length > 0 ? '📚 Khóa học khác / đang học' : '📚 Tất cả khóa học'}>
+                      <optgroup label={teaching.length > 0 ? 'Khóa học khác / đang học' : 'Tất cả khóa học'}>
                         {other.map(c => (
                           <option key={c.id || c.code} value={c.id || c.code}>
                             {c.name} ({c.code})
@@ -1005,27 +1025,30 @@ export function TeacherPortal({
           type="button"
           onClick={() => handleTabChange('assistant')}
           className={`teacher-tab-btn ${activeTab === 'assistant' ? 'active' : ''}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
-          <span>🤖</span>
-          <span>Trợ Lý AI</span>
+          <Bot size={15} />
+          <span>Trợ Lý Giảng Dạy</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleTabChange('grades')}
           className={`teacher-tab-btn ${activeTab === 'grades' ? 'active' : ''}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
-          <span>📥</span>
-          <span>Bảng điểm</span>
+          <Table size={15} />
+          <span>Sổ Điểm</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleTabChange('quiz')}
           className={`teacher-tab-btn ${activeTab === 'quiz' ? 'active' : ''}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
-          <span>⚡</span>
-          <span>Trắc Nghiệm</span>
+          <HelpCircle size={15} />
+          <span>Tạo Đề Moodle XML</span>
         </button>
       </div>
 
@@ -1038,7 +1061,11 @@ export function TeacherPortal({
           <div className="messages">
             {assistantChat.map((m, i) => (
               <div className={`message ${m.role}`} key={i}>
-                {m.role === 'ai' && <span className="bot-avatar">✦</span>}
+                {m.role === 'ai' && (
+                  <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Sparkles size={16} />
+                  </span>
+                )}
                 <div id={`teacher-chat-msg-${i}`} style={{ minWidth: 0, width: '100%' }}>
                   <MarkdownRenderer content={m.text} />
 
@@ -1056,11 +1083,11 @@ export function TeacherPortal({
                             href={url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            style={{ textDecoration: 'none' }}
+                            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                           >
-                            <span className="citation-icon">🌐</span>
+                            <Globe size={12} style={{ color: '#38bdf8' }} />
                             <span className="citation-text">{rawName}</span>
-                            <span style={{ fontSize: '10px', opacity: 0.8, marginLeft: '2px' }}>↗</span>
+                            <ExternalLink size={10} style={{ opacity: 0.7 }} />
                           </a>
                         );
                       })}
@@ -1074,9 +1101,10 @@ export function TeacherPortal({
                         type="button"
                         className={`copy-message-btn ${copiedMsgIdx === i ? 'copied' : ''}`}
                         onClick={() => copyMessageText(m.text, i)}
-                        title="Sao chép nội dung"
+                        title="Sao chép nội dung câu trả lời"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
                       >
-                        <span>{copiedMsgIdx === i ? '✓' : '📋'}</span>
+                        {copiedMsgIdx === i ? <Check size={13} /> : <Copy size={13} />}
                         <span>{copiedMsgIdx === i ? 'Đã sao chép' : 'Sao chép'}</span>
                       </button>
                     </div>
@@ -1087,7 +1115,9 @@ export function TeacherPortal({
 
             {assistantLoading && (
               <div className="message ai">
-                <span className="bot-avatar">✦</span>
+                <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Sparkles size={16} />
+                </span>
                 <div className="typing">
                   <i />
                   <i />
@@ -1109,24 +1139,10 @@ export function TeacherPortal({
                   void askAssistant();
                 }
               }}
-              placeholder="Đặt câu hỏi, yêu cầu soạn tài liệu, bài tập, giáo án hay đề thi cho môn học..."
+              placeholder="Nhập yêu cầu: đề xuất học liệu, soạn bài tập, lập kế hoạch bài giảng hoặc tạo câu hỏi thi..."
             />
             <div className="chat-compose-footer">
-              <div className="chat-compose-chips">
-                {/* AI Model Selector */}
-                <select
-                  value={assistantModel}
-                  onChange={e => setAssistantModel(e.target.value)}
-                  className="model-selector-chip"
-                  title="Chọn model AI"
-                >
-                  {availableModels.map(m => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <div className="chat-compose-chips" />
 
               <div className="chat-compose-actions">
                 <button
@@ -1137,14 +1153,15 @@ export function TeacherPortal({
                     setAssistantChat([
                       {
                         role: 'ai',
-                        text: `Chào Thầy/Cô! Em là trợ lý AI môn **${curCourse?.name || 'này'}**. Thầy/Cô có thể yêu cầu em tìm tài liệu học tập, soạn bài tập về nhà, lập kế hoạch bài giảng hoặc tạo câu hỏi thi cho môn học nhé!`,
+                        text: `Trợ lý AI Giảng dạy môn **${curCourse?.name || 'môn học'}** đã sẵn sàng. Bạn có thể yêu cầu đề xuất tài liệu học tập, soạn bài tập, lập kế hoạch bài giảng hoặc phân tích kết quả sổ điểm.`,
                       },
                     ]);
                   }}
                   disabled={assistantChat.length <= 1 || assistantLoading}
-                  title="Xóa lịch sử trò chuyện"
+                  title="Xóa toàn bộ lịch sử trò chuyện"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
                 >
-                  <span style={{ fontSize: '13px' }}>🗑</span>
+                  <Trash2 size={13} />
                   <span>Xóa lịch sử</span>
                 </button>
 
@@ -1164,21 +1181,27 @@ export function TeacherPortal({
                       border: 'none',
                       padding: '0.5rem 1.1rem',
                       borderRadius: '10px',
-                      fontWeight: 700,
+                      fontWeight: 600,
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '6px',
                       cursor: 'pointer',
                       boxShadow: '0 2px 10px rgba(239, 68, 68, 0.4)',
                     }}
-                    title="Dừng câu trả lời của AI"
+                    title="Dừng phản hồi"
                   >
-                    <span style={{ fontSize: '11px' }}>■</span>
+                    <Square size={12} fill="currentColor" />
                     <span>Dừng</span>
                   </button>
                 ) : (
-                  <button onClick={() => void askAssistant()} disabled={!assistantInput.trim()}>
-                    Gửi <b>↑</b>
+                  <button
+                    className="chat-send-btn"
+                    onClick={() => void askAssistant()}
+                    disabled={!assistantInput.trim()}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <span>Gửi</span>
+                    <Send size={14} />
                   </button>
                 )}
               </div>
@@ -1196,7 +1219,7 @@ export function TeacherPortal({
           <div className="teacher-control-bar">
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap', flex: '1 1 auto' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                <span style={{ fontSize: '1.2rem' }}>📊</span>
+                <Table size={18} style={{ color: '#7c6df2' }} />
                 <strong style={{ fontSize: '0.98rem', color: '#f3f2f8' }}>Sổ Điểm (Grader report)</strong>
                 <span
                   style={{
@@ -1209,7 +1232,7 @@ export function TeacherPortal({
                     fontWeight: 600,
                   }}
                 >
-                  ● Trực tiếp Moodle
+                  ● Trực tiếp LMS
                 </span>
               </div>
 
@@ -1240,10 +1263,10 @@ export function TeacherPortal({
                     <option value="all">Chưa có bài kiểm tra nào</option>
                   ) : (
                     <>
-                      <option value="all">📊 Tất cả cột điểm (All grades)</option>
+                      <option value="all">Tất cả cột điểm (All grades)</option>
                       {activeGradeColumns.map(col => (
                         <option key={col.id} value={col.id}>
-                          📝 {col.name} (Tối đa: {col.grademax}đ)
+                          {col.name} (Tối đa: {col.grademax}đ)
                         </option>
                       ))}
                     </>
@@ -1263,7 +1286,7 @@ export function TeacherPortal({
                   border: 'none',
                   background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
                   color: '#fff',
-                  fontWeight: 700,
+                  fontWeight: 600,
                   fontSize: '0.86rem',
                   cursor: 'pointer',
                   display: 'flex',
@@ -1275,10 +1298,10 @@ export function TeacherPortal({
                   width: isMobile ? '100%' : 'auto',
                   minHeight: '40px',
                 }}
-                title="Mở bảng nhập điểm và sử dụng AI Hút điểm"
+                title="Mở bảng nhập điểm tự động từ Excel/Hình ảnh"
               >
-                <span>📥</span>
-                <span>Hút Điểm Thông Minh / Nhập Điểm</span>
+                <UploadCloud size={16} />
+                <span>Nhập điểm thông minh</span>
               </button>
             </div>
           </div>
@@ -1341,7 +1364,7 @@ export function TeacherPortal({
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: '1 1 200px' }}>
                 <input
                   type="text"
-                  placeholder="🔍 Tìm kiếm sinh viên theo tên hoặc mã SV..."
+                  placeholder="Tìm kiếm sinh viên theo tên hoặc mã SV..."
                   value={gradebookSearch}
                   onChange={e => setGradebookSearch(e.target.value)}
                   style={{
@@ -1380,11 +1403,11 @@ export function TeacherPortal({
                       cursor: 'pointer',
                     }}
                   >
-                    <option value="name-asc">🔤 Tên: A → Z</option>
-                    <option value="name-desc">🔤 Tên: Z → A</option>
-                    <option value="grade-desc">📈 Điểm: Cao nhất</option>
-                    <option value="grade-asc">📉 Điểm: Thấp nhất</option>
-                    <option value="default">📋 Thứ tự gốc (Mặc định)</option>
+                    <option value="name-asc">Tên: A → Z</option>
+                    <option value="name-desc">Tên: Z → A</option>
+                    <option value="grade-desc">Điểm: Cao nhất</option>
+                    <option value="grade-asc">Điểm: Thấp nhất</option>
+                    <option value="default">Thứ tự mặc định</option>
                   </select>
                 </div>
               </div>
@@ -1447,7 +1470,7 @@ export function TeacherPortal({
                               return (
                                 <div key={col.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem' }}>
                                   <div style={{ fontSize: '0.75rem', color: '#c4c1d6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    📝 {col.name}
+                                    {col.name}
                                   </div>
                                   <div
                                     style={{
@@ -1485,7 +1508,7 @@ export function TeacherPortal({
                                 borderLeft: '3px solid #7c6df2',
                               }}
                             >
-                              💬 {displayedGradeColumns.length > 1 ? `${col.name}: ` : ''}{fb}
+                              {displayedGradeColumns.length > 1 ? `${col.name}: ` : ''}{fb}
                             </div>
                           );
                         })}
@@ -1543,7 +1566,6 @@ export function TeacherPortal({
                         >
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <span>📝</span>
                               <span style={{ fontWeight: 600 }}>{col.name}</span>
                             </div>
                             <span
@@ -1570,10 +1592,9 @@ export function TeacherPortal({
                       {showFeedbackColumn && (
                         <th style={{ padding: '0.85rem 1rem', minWidth: '220px', color: '#cfc8ff' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <span>💬</span>
                             <span style={{ fontWeight: 600 }}>Nhận xét (str_feedback)</span>
                           </div>
-                          <div style={{ fontSize: '0.75rem', color: '#9894ad' }}>Đẩy Moodle &amp; hiển thị sinh viên</div>
+                          <div style={{ fontSize: '0.75rem', color: '#9894ad' }}>Đẩy LMS &amp; hiển thị sinh viên</div>
                         </th>
                       )}
                     </tr>
@@ -1725,7 +1746,7 @@ export function TeacherPortal({
                     border: 'none',
                     background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
                     color: '#fff',
-                    fontWeight: 700,
+                    fontWeight: 600,
                     fontSize: '0.9rem',
                     cursor: 'pointer',
                     display: 'flex',
@@ -1737,10 +1758,10 @@ export function TeacherPortal({
                     width: isMobile ? '100%' : 'auto',
                     minHeight: '44px',
                   }}
-                  title="Mở bảng nhập điểm và sử dụng AI Hút điểm đa định dạng"
+                  title="Mở bảng nhập điểm tự động từ file, hình ảnh hoặc văn bản"
                 >
-                  <span>📥</span>
-                  <span>Hút Điểm Thông Minh (File/Ảnh/Dán) &amp; Nhập Điểm</span>
+                  <UploadCloud size={16} />
+                  <span>Nhập Điểm Tự Động (Excel / Ảnh / Dán)</span>
                 </button>
               </div>
             </div>
@@ -1770,11 +1791,11 @@ export function TeacherPortal({
                 >
                   <div>
                     <h3 style={{ margin: 0, color: '#f3f2f8', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span>📥</span>
-                      <span>Hút &amp; Nhập Điểm Sổ Điểm Moodle</span>
+                      <UploadCloud size={18} style={{ color: '#7c6df2' }} />
+                      <span>Nhập Điểm Sổ Điểm LMS</span>
                     </h3>
                     <p style={{ margin: '0.2rem 0 0', color: '#9894ad', fontSize: '0.8rem' }}>
-                      Tự động trích xuất điểm từ file/ảnh hoặc nhập trực tiếp cho sinh viên.
+                      Tự động trích xuất điểm từ tệp/hình ảnh hoặc nhập trực tiếp cho sinh viên.
                     </p>
                   </div>
                   <button
@@ -1832,7 +1853,7 @@ export function TeacherPortal({
                       >
                         {activeGradeColumns.map(col => (
                           <option key={col.id} value={col.id}>
-                            📝 {col.name} (Tối đa: {col.grademax}đ)
+                            {col.name} (Tối đa: {col.grademax}đ)
                           </option>
                         ))}
                       </select>
@@ -1852,9 +1873,13 @@ export function TeacherPortal({
                           cursor: 'pointer',
                           width: isMobile ? '100%' : 'auto',
                           textAlign: 'center',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
                         }}
                       >
-                        📝 Dán văn bản thô
+                        <FileText size={13} />
+                        <span>Dán văn bản</span>
                       </button>
                     </div>
                   </div>
@@ -1895,12 +1920,14 @@ export function TeacherPortal({
                         }
                       }}
                     />
-                    <div style={{ fontSize: '24px', marginBottom: '0.25rem' }}>{isExtracting ? '⏳' : '📥'}</div>
+                    <div style={{ fontSize: '24px', marginBottom: '0.25rem', display: 'flex', justifyContent: 'center' }}>
+                      {isExtracting ? <Sparkles size={24} style={{ color: '#a855f7' }} /> : <UploadCloud size={24} style={{ color: '#7c6df2' }} />}
+                    </div>
                     <h4 style={{ margin: '0 0 0.2rem', fontSize: '0.9rem', color: '#f3f2f8' }}>
-                      {isExtracting ? 'Biệt đội AI đang "hút" điểm...' : 'Nhấn hoặc kéo thả Bảng Điểm (Excel, Ảnh, PDF)'}
+                      {isExtracting ? 'Đang phân tích và trích xuất bảng điểm...' : 'Tải lên bảng điểm (Excel, Hình ảnh hoặc PDF)'}
                     </h4>
                     <p style={{ margin: 0, fontSize: '0.75rem', color: '#9894ad' }}>
-                      Tự động dò khớp tên sinh viên và điền điểm số
+                      Tự động đối chiếu thông tin sinh viên và điền điểm số
                     </p>
                   </div>
 
@@ -2047,10 +2074,10 @@ export function TeacherPortal({
                               <th style={{ padding: '0.75rem 1rem', width: '40px' }}>STT</th>
                               <th style={{ padding: '0.75rem 1rem' }}>Sinh viên</th>
                               <th style={{ padding: '0.75rem 1rem', width: '160px', color: '#cfc8ff' }}>
-                                📝 {activeGradeColumns.find(c => c.id === (selectedGradeColumnId !== 'all' ? selectedGradeColumnId : activeGradeColumns[0]?.id))?.name || 'Điểm'}
+                                {activeGradeColumns.find(c => c.id === (selectedGradeColumnId !== 'all' ? selectedGradeColumnId : activeGradeColumns[0]?.id))?.name || 'Điểm'}
                               </th>
                               <th style={{ padding: '0.75rem 1rem', color: '#cfc8ff' }}>
-                                💬 Nhận xét (str_feedback)
+                                Nhận xét (str_feedback)
                               </th>
                             </tr>
                           </thead>
@@ -2256,11 +2283,11 @@ export function TeacherPortal({
             {/* Header */}
             <div>
               <h2 style={{ margin: '0 0 0.25rem', fontSize: '1.15rem', color: '#f3f2f8', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span>⚡</span>
-                <span>Lò Ấp Ngân Hàng Câu Hỏi Moodle XML</span>
+                <Sparkles size={18} style={{ color: '#7c6df2' }} />
+                <span>Khởi Tạo Ngân Hàng Câu Hỏi Moodle XML</span>
               </h2>
               <p style={{ margin: 0, fontSize: '0.82rem', color: '#9894ad' }}>
-                Biên soạn bộ câu hỏi đa định dạng chuẩn xác 100% từ tài liệu bài giảng, sẵn sàng nạp thẳng vào Ngân hàng câu hỏi Moodle.
+                Biên soạn bộ câu hỏi đa định dạng chuẩn xác 100% từ tài liệu bài giảng, sẵn sàng nạp thẳng vào Ngân hàng câu hỏi LMS.
               </p>
             </div>
 
@@ -2271,12 +2298,13 @@ export function TeacherPortal({
               </label>
               <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(auto-fit, minmax(140px, 1fr))' : 'repeat(auto-fit, minmax(210px, 1fr))', gap: '0.65rem' }}>
                 {[
-                  { id: 'mixed', label: '🔀 Kết hợp (Mixed)', desc: 'Xen kẽ cả 1 lựa chọn, Đúng/Sai & Nhiều đáp án' },
-                  { id: 'multiple_choice', label: '🔤 1 Lựa chọn (A/B/C/D)', desc: 'Chuẩn 4 phương án, 1 đáp án đúng' },
-                  { id: 'true_false', label: '⚖️ Đúng / Sai (True/False)', desc: 'Phán đoán tính đúng/sai của nhận định' },
-                  { id: 'multiple_select', label: '☑️ Chọn nhiều đáp án', desc: 'Có từ 2 đến 3 đáp án đúng (Multi-answer)' },
+                  { id: 'mixed', label: 'Kết hợp (Mixed)', icon: Sparkles, desc: 'Xen kẽ cả 1 lựa chọn, Đúng/Sai & Nhiều đáp án' },
+                  { id: 'multiple_choice', label: '1 Lựa chọn (A/B/C/D)', icon: HelpCircle, desc: 'Chuẩn 4 phương án, 1 đáp án đúng' },
+                  { id: 'true_false', label: 'Đúng / Sai (True/False)', icon: BookX, desc: 'Phán đoán tính đúng/sai của nhận định' },
+                  { id: 'multiple_select', label: 'Chọn nhiều đáp án', icon: CheckSquare, desc: 'Có từ 2 đến 3 đáp án đúng (Multi-answer)' },
                 ].map(item => {
                   const isSelected = quizQuestionType === item.id;
+                  const Icon = item.icon;
                   return (
                     <button
                       key={item.id}
@@ -2297,8 +2325,9 @@ export function TeacherPortal({
                         gap: '0.25rem',
                       }}
                     >
-                      <strong style={{ fontSize: isMobile ? '0.88rem' : '0.94rem', color: isSelected ? '#fff' : '#c4c1d6' }}>
-                        {item.label}
+                      <strong style={{ fontSize: isMobile ? '0.88rem' : '0.94rem', color: isSelected ? '#fff' : '#c4c1d6', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Icon size={14} />
+                        <span>{item.label}</span>
                       </strong>
                       <small style={{ fontSize: isMobile ? '0.72rem' : '0.76rem', color: isSelected ? '#a594fd' : '#6b6684', lineHeight: 1.3 }}>
                         {item.desc}
@@ -2386,9 +2415,9 @@ export function TeacherPortal({
               </label>
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                 {[
-                  { id: 'easy', label: '🟢 Dễ (Nhận biết)' },
-                  { id: 'normal', label: '🟡 Trung bình (Thông hiểu)' },
-                  { id: 'hard', label: '🔴 Khó (Vận dụng cao)' },
+                  { id: 'easy', label: 'Cơ bản (Nhận biết)' },
+                  { id: 'normal', label: 'Trung bình (Thông hiểu)' },
+                  { id: 'hard', label: 'Nâng cao (Vận dụng cao)' },
                 ].map(item => {
                   const isSelected = quizDifficulty === item.id;
                   return (
@@ -2402,7 +2431,7 @@ export function TeacherPortal({
                         border: isSelected ? '1.5px solid #f59e0b' : '1px solid #26233a',
                         background: isSelected ? 'rgba(245, 158, 11, 0.22)' : '#141220',
                         color: isSelected ? '#fbbf24' : '#9894ad',
-                        fontWeight: 700,
+                        fontWeight: 600,
                         fontSize: '0.84rem',
                         cursor: 'pointer',
                         transition: 'all 0.15s ease',
@@ -2416,48 +2445,10 @@ export function TeacherPortal({
               </div>
             </div>
 
-            {/* 4. Mô Hình AI (Own Full Line) */}
-            <div>
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.45rem' }}>
-                4. MÔ HÌNH AI (AI ENGINE):
-              </label>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                {[
-                  { id: 'gemini:gemini-2.5-flash', label: '⚡ Gemini 2.5 Flash' },
-                  { id: 'gemini:gemini-2.5-pro', label: '🧠 Gemini 2.5 Pro' },
-                  { id: 'anthropic:claude-3-5-sonnet-20241022', label: '✨ Claude 3.5 Sonnet' },
-                  { id: 'openai:gpt-4o', label: '🌐 GPT-4o' },
-                ].map(item => {
-                  const isSelected = quizModel === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => setQuizModel(item.id)}
-                      style={{
-                        padding: isMobile ? '0.45rem 0.8rem' : '0.55rem 1rem',
-                        borderRadius: '8px',
-                        border: isSelected ? '1.5px solid #a855f7' : '1px solid #26233a',
-                        background: isSelected ? 'rgba(168, 85, 247, 0.22)' : '#141220',
-                        color: isSelected ? '#d8b4fe' : '#9894ad',
-                        fontWeight: 700,
-                        fontSize: '0.84rem',
-                        cursor: 'pointer',
-                        transition: 'all 0.15s ease',
-                        boxShadow: isSelected ? '0 0 12px rgba(168, 85, 247, 0.25)' : 'none',
-                      }}
-                    >
-                      {item.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
             {/* Document Text / Notes (Expanded Textarea) */}
             <div>
               <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.45rem' }}>
-                5. TÀI LIỆU NGUỒN / GHI CHÚ BÀI GIẢNG (TÙY CHỌN):
+                4. TÀI LIỆU NGUỒN / GHI CHÚ BÀI GIẢNG (TÙY CHỌN):
               </label>
               <textarea
                 rows={4}
@@ -2483,7 +2474,7 @@ export function TeacherPortal({
             {/* Footer with Big Vibrant Action Button */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.85rem', paddingTop: '0.5rem', borderTop: '1px solid #26233a' }}>
               <div style={{ fontSize: '0.8rem', color: '#9894ad', flex: '1 1 200px' }}>
-                💡 File xuất ra đạt chuẩn <strong>Moodle XML</strong> có sẵn CDATA, feedback, penalty và fraction 100%.
+                Tệp xuất ra đạt chuẩn <strong>Moodle XML</strong> có sẵn CDATA, feedback, penalty và fraction 100%.
               </div>
 
               <button
@@ -2496,7 +2487,7 @@ export function TeacherPortal({
                   border: 'none',
                   background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
                   color: '#fff',
-                  fontWeight: 700,
+                  fontWeight: 600,
                   fontSize: '0.94rem',
                   cursor: isGeneratingQuiz ? 'not-allowed' : 'pointer',
                   opacity: isGeneratingQuiz ? 0.7 : 1,
@@ -2512,13 +2503,13 @@ export function TeacherPortal({
               >
                 {isGeneratingQuiz ? (
                   <>
-                    <span>⏳</span>
+                    <Sparkles size={16} />
                     <span>Đang biên soạn câu hỏi...</span>
                   </>
                 ) : (
                   <>
-                    <span>⚡</span>
-                    <span>Tạo Ngân Hàng Câu Hỏi Moodle XML ({quizCount} câu)</span>
+                    <Sparkles size={16} />
+                    <span>Tạo ngân hàng câu hỏi Moodle XML ({quizCount} câu)</span>
                   </>
                 )}
               </button>
@@ -2567,7 +2558,7 @@ export function TeacherPortal({
               >
                 <div>
                   <h3 style={{ margin: 0, fontSize: '0.98rem', color: '#f3f2f8' }}>
-                    📝 Đã sẵn sàng {generatedQuestions.length} câu hỏi
+                    Đã sẵn sàng {generatedQuestions.length} câu hỏi
                   </h3>
                   <p style={{ margin: '0.15rem 0 0', fontSize: '0.78rem', color: '#9894ad' }}>
                     Tải ngay file XML hoặc chỉnh sửa câu chữ bên dưới
@@ -2588,9 +2579,13 @@ export function TeacherPortal({
                       cursor: 'pointer',
                       flex: isMobile ? 1 : 'initial',
                       minHeight: '38px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
                     }}
                   >
-                    📖 Hướng dẫn
+                    <BookOpen size={14} />
+                    <span>Hướng dẫn</span>
                   </button>
 
                   <button
@@ -2606,9 +2601,13 @@ export function TeacherPortal({
                       cursor: 'pointer',
                       flex: isMobile ? 1 : 'initial',
                       minHeight: '38px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
                     }}
                   >
-                    🔍 Xem XML
+                    <FileText size={14} />
+                    <span>Xem XML</span>
                   </button>
 
                   <button
@@ -2620,7 +2619,7 @@ export function TeacherPortal({
                       border: 'none',
                       background: 'linear-gradient(135deg, #20bfa9, #179b89)',
                       color: '#fff',
-                      fontWeight: 700,
+                      fontWeight: 600,
                       fontSize: '0.86rem',
                       cursor: 'pointer',
                       display: 'flex',
@@ -2632,8 +2631,8 @@ export function TeacherPortal({
                       minHeight: '38px',
                     }}
                   >
-                    <span>📥</span>
-                    <span>Tải file quiz.xml</span>
+                    <Download size={14} />
+                    <span>Tải tệp quiz.xml</span>
                   </button>
                 </div>
               </div>
@@ -2686,7 +2685,7 @@ export function TeacherPortal({
                             border: '1px solid rgba(255, 255, 255, 0.1)',
                           }}
                         >
-                          {isMulti ? '☑️ Nhiều đáp án' : isTF ? '⚖️ Đúng / Sai' : '🔤 1 Lựa chọn'}
+                          {isMulti ? 'Nhiều đáp án' : isTF ? 'Đúng / Sai' : '1 Lựa chọn'}
                         </span>
                       </div>
 
@@ -2742,7 +2741,7 @@ export function TeacherPortal({
                         const optLabel = isTF
                           ? (optIdx === 0 ? 'Đúng' : 'Sai')
                           : isMulti
-                          ? (isCorrect ? '☑ ' + ['A', 'B', 'C', 'D', 'E'][optIdx] : '☐ ' + ['A', 'B', 'C', 'D', 'E'][optIdx])
+                          ? (isCorrect ? '[x] ' + ['A', 'B', 'C', 'D', 'E'][optIdx] : '[ ] ' + ['A', 'B', 'C', 'D', 'E'][optIdx])
                           : ['A', 'B', 'C', 'D', 'E'][optIdx];
 
                         return (
@@ -2834,7 +2833,7 @@ export function TeacherPortal({
                     {/* Explanation */}
                     <div>
                       <label style={{ display: 'block', fontSize: '0.75rem', color: '#9894ad', marginBottom: '0.2rem' }}>
-                        💡 Lời giải thích / General Feedback:
+                        Giải thích chi tiết / General Feedback:
                       </label>
                       <input
                         type="text"
@@ -2879,7 +2878,7 @@ export function TeacherPortal({
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
               <h3 style={{ margin: 0, fontSize: '1.05rem', color: '#f3f2f8' }}>
-                📝 Dán Danh Sách Điểm Dạng Văn Bản
+                Dán danh sách điểm dạng văn bản
               </h3>
               <button
                 type="button"
@@ -2896,7 +2895,7 @@ export function TeacherPortal({
               rows={6}
               value={rawTextPaste}
               onChange={e => setRawTextPaste(e.target.value)}
-              placeholder="Ví dụ:&#10;Bùi Xuân Huấn, 9.5&#10;Ngô Bá Khá, 10.0&#10;huanhoahong@example.com: 8.5"
+              placeholder="Ví dụ:&#10;Nguyễn Văn An, 9.5&#10;Trần Thị Bình, 10.0&#10;leminhcuong@example.com: 8.5"
               style={{
                 width: '100%',
                 padding: '0.75rem',
@@ -2963,7 +2962,7 @@ export function TeacherPortal({
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <h3 style={{ margin: 0, fontSize: '1.05rem', color: '#f3f2f8' }}>
-                📄 Xem Trước Định Dạng Moodle XML
+                Xem trước định dạng Moodle XML
               </h3>
               <button
                 type="button"
@@ -3010,9 +3009,13 @@ export function TeacherPortal({
                   cursor: 'pointer',
                   flex: isMobile ? 1 : 'initial',
                   minHeight: '42px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
                 }}
               >
-                📋 Sao chép XML
+                <Copy size={14} />
+                <span>Sao chép XML</span>
               </button>
               <button
                 type="button"
@@ -3027,9 +3030,13 @@ export function TeacherPortal({
                   cursor: 'pointer',
                   flex: isMobile ? 1 : 'initial',
                   minHeight: '42px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
                 }}
               >
-                📥 Tải file quiz.xml
+                <Download size={14} />
+                <span>Tải tệp quiz.xml</span>
               </button>
             </div>
           </div>
@@ -3051,7 +3058,7 @@ export function TeacherPortal({
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#f3f2f8' }}>
-                🚀 3 Bước Nhập File XML Vào Moodle
+                Hướng dẫn 3 bước nhập tệp XML vào Moodle
               </h3>
               <button
                 type="button"

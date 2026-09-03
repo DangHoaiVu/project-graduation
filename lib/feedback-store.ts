@@ -21,29 +21,35 @@ const FILE_PATH = path.join(DATA_DIR, 'student-feedbacks.json');
 // Memory store keyed strictly by `${studentId}::${courseId}`
 const memoryStore: Record<string, StudentFeedbackRecord> = {};
 
+let fsAvailable: boolean | null = null;
+
 function readDiskStore(): Record<string, StudentFeedbackRecord> {
+  if (fsAvailable === false) return { ...memoryStore };
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
+    fsAvailable = true;
     if (fs.existsSync(FILE_PATH)) {
       const raw = fs.readFileSync(FILE_PATH, 'utf-8');
       return { ...memoryStore, ...JSON.parse(raw) };
     }
-  } catch (e) {
-    console.warn('Could not read feedback store:', e);
+  } catch {
+    fsAvailable = false;
   }
   return { ...memoryStore };
 }
 
 function writeDiskStore(data: Record<string, StudentFeedbackRecord>) {
+  if (fsAvailable === false) return;
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
     fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (e) {
-    console.warn('Could not write feedback store:', e);
+    fsAvailable = true;
+  } catch {
+    fsAvailable = false;
   }
 }
 

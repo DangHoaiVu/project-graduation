@@ -1134,6 +1134,7 @@ button {
   margin-top: 18px;
   width: 100%;
   height: 42px;
+  padding: 0 18px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.15);
   border: 1px solid rgba(255, 255, 255, 0.35);  
@@ -2122,37 +2123,49 @@ button {
 }
 
 .add-source {
-  border: 1px dashed #4a3e7e;
-  color: #b7aaff;
-  background: #1c1834;
-  border-radius: 8px;
-  height: 35px;
-  font-size: 9px;
-  margin-top: 9px;
-  transition: .2s;
+  border: 1px dashed rgba(124, 109, 242, 0.45);
+  color: #cfc8ff;
+  background: rgba(124, 109, 242, 0.08);
+  border-radius: 10px;
+  min-height: 42px;
+  padding: 0.6rem 1rem;
+  font-size: 12px;
+  font-weight: 550;
+  margin-top: 12px;
+  margin-bottom: 12px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .add-source:hover {
-  background: #262047;
-  border-color: #6c5ce7;
+  background: rgba(124, 109, 242, 0.18);
+  border-color: #7c6df2;
+  color: #ffffff;
 }
 
 .grounded {
-  margin-top: auto;
-  padding: 10px 11px;
+  margin-top: 4px;
+  padding: 13px 14px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
+  border-radius: 12px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   color: #f1f5f9;
   transition: all 0.2s ease;
+  box-sizing: border-box;
 }
 
 .grounded:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(124, 109, 242, 0.35);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(124, 109, 242, 0.4);
 }
 
 .grounded.external-on {
@@ -2489,6 +2502,11 @@ button {
   color: #8c87a3;
 }
 
+.chat-compose button span {
+  color: inherit;
+  font-size: inherit;
+}
+
 .chat-compose button {
   border: 0;
   background: var(--purple);
@@ -2504,7 +2522,7 @@ button {
 }
 
 .chat-compose button:disabled {
-  opacity: .4;
+  opacity: .45;
   cursor: not-allowed;
 }
 
@@ -2516,6 +2534,47 @@ button {
   width: 17px;
   height: 17px;
   border-radius: 5px;
+}
+
+.chat-send-btn {
+  border: 0 !important;
+  background: linear-gradient(135deg, #7c6df2, #5a49d7) !important;
+  color: #ffffff !important;
+  border-radius: 8px !important;
+  padding: 7px 15px !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  transition: all 0.2s ease !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  cursor: pointer !important;
+  box-shadow: 0 2px 8px rgba(124, 109, 242, 0.3) !important;
+}
+
+.chat-send-btn span {
+  color: #ffffff !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+}
+
+.chat-send-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #8b7df5, #6756e8) !important;
+  box-shadow: 0 4px 14px rgba(124, 109, 242, 0.45) !important;
+  transform: translateY(-1px);
+}
+
+.chat-send-btn:disabled {
+  opacity: 0.45 !important;
+  cursor: not-allowed !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: rgba(255, 255, 255, 0.5) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.chat-send-btn:disabled span {
+  color: rgba(255, 255, 255, 0.5) !important;
 }
 
 .clear-chat-btn {
@@ -2534,6 +2593,11 @@ button {
   white-space: nowrap !important;
 }
 
+.clear-chat-btn span {
+  color: #fca5a5 !important;
+  font-size: 11.5px !important;
+}
+
 .clear-chat-btn:hover:not(:disabled) {
   background: rgba(239, 68, 68, 0.22) !important;
   border-color: #ef4444 !important;
@@ -2542,14 +2606,22 @@ button {
   transform: translateY(-1px);
 }
 
+.clear-chat-btn:hover:not(:disabled) span {
+  color: #ffffff !important;
+}
+
 .clear-chat-btn:disabled {
-  opacity: 0.32 !important;
+  opacity: 0.35 !important;
   cursor: not-allowed !important;
   border-color: rgba(255, 255, 255, 0.08) !important;
   background: transparent !important;
   color: #6d6984 !important;
   box-shadow: none !important;
   transform: none !important;
+}
+
+.clear-chat-btn:disabled span {
+  color: #6d6984 !important;
 }
 
 .message-toolbar {
@@ -5419,6 +5491,16 @@ body {
   background: transparent;
 }
 
+.tool-workspace-container > .artifact.notebook-mindmap-wrapper {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+  flex: 1 1 0% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
 .tool-config-panel {
   display: flex;
   flex-direction: column;
@@ -5616,17 +5698,48 @@ body {
    GOOGLE NOTEBOOKLM-STYLE HORIZONTAL MINDMAP (Interactive Tree & Bezier Lines)
    ============================================================================== */
 .notebook-mindmap-wrapper {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  position: relative;
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+  position: relative !important;
+  flex: 1 1 0% !important;
+  overflow: hidden !important;
+}
+
+.notebook-mindmap-wrapper .artifact-head {
+  flex-shrink: 0 !important;
+  margin-bottom: 10px !important;
+}
+
+.notebook-mindmap-wrapper.is-full-window {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 99999 !important;
+  background: #080614 !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  padding: 16px 24px 24px !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
+.notebook-mindmap-wrapper.is-full-window .artifact-head {
+  flex-shrink: 0 !important;
+  margin-bottom: 12px !important;
 }
 
 .notebook-canvas-container {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 320px;
-  height: 100%;
+  position: relative !important;
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: 100% !important;
   background-color: #0b091a;
   background-image: radial-gradient(rgba(255, 255, 255, 0.09) 1px, transparent 1px);
   background-size: 24px 24px;
@@ -5638,20 +5751,20 @@ body {
 }
 
 .canvas-zoom-controls {
-  position: absolute;
-  bottom: 20px;
-  right: 20px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: rgba(18, 14, 40, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  padding: 4px 8px;
-  border-radius: 24px;
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-  z-index: 100;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  position: absolute !important;
+  bottom: 24px !important;
+  right: 24px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  background: rgba(18, 14, 40, 0.95) !important;
+  border: 1px solid rgba(139, 92, 246, 0.4) !important;
+  padding: 6px 12px !important;
+  border-radius: 30px !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  backdrop-filter: blur(16px) !important;
+  z-index: 100 !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 20px rgba(124, 58, 237, 0.25) !important;
 }
 
 .canvas-zoom-controls button {
@@ -6247,31 +6360,46 @@ body {
   height: 30px;
   font-size: 11.5px;
   font-weight: 600;
-  padding: 0 11px;
-  border-radius: 9px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.05);
-  color: #cbd5e1;
+  padding: 0 12px !important;
+  border-radius: 9px !important;
+  border: 1px solid rgba(124, 109, 242, 0.4) !important;
+  background: rgba(124, 109, 242, 0.15) !important;
+  color: #cfc8ff !important;
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
   transition: all 0.2s ease;
   box-sizing: border-box;
 }
 
+.mode-indicator-chip span {
+  color: #cfc8ff !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+}
+
 .mode-indicator-chip:hover {
-  background: rgba(255, 255, 255, 0.09);
-  border-color: rgba(255, 255, 255, 0.25);
-  color: #ffffff;
+  background: rgba(124, 109, 242, 0.25) !important;
+  border-color: rgba(124, 109, 242, 0.6) !important;
+  color: #ffffff !important;
+}
+
+.mode-indicator-chip:hover span {
+  color: #ffffff !important;
 }
 
 .mode-indicator-chip.active,
 .mode-indicator-chip.style-detailed {
-  background: rgba(124, 109, 242, 0.25);
-  border-color: #7c6df2;
-  color: #ffffff;
-  box-shadow: 0 0 10px rgba(124, 109, 242, 0.3);
+  background: rgba(124, 109, 242, 0.3) !important;
+  border-color: #7c6df2 !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 10px rgba(124, 109, 242, 0.35);
+}
+
+.mode-indicator-chip.active span,
+.mode-indicator-chip.style-detailed span {
+  color: #ffffff !important;
 }
 
 /* Model Selector Dropdown Chip */
@@ -6743,6 +6871,7 @@ body {
   .teacher-modal-backdrop {
     padding: 0;
     z-index: 9999;
+  }
 
   .teacher-modal-panel {
     max-height: 95vh;
@@ -6952,5 +7081,4 @@ body {
     bottom: 8px;
     padding: 0.65rem;
   }
-}
 }

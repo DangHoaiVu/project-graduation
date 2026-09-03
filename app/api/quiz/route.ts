@@ -244,6 +244,7 @@ Không bao gồm markdown hay văn bản ngoài JSON.`;
         const parsed = JSON.parse(result.text);
         const questionsList = parsed.questions || parsed.quiz || (Array.isArray(parsed) ? parsed : []);
         if (Array.isArray(questionsList) && questionsList.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const normalized = questionsList.slice(0, count).map((item: any, idx: number) => {
             const rawChoices = item.choices || item.options || [];
             let qType: 'multiple_choice' | 'true_false' | 'multiple_select' = 'multiple_choice';

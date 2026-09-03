@@ -1,6 +1,22 @@
 'use client';
 
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  ArrowLeftRight,
+  ArrowUpDown,
+  RefreshCw,
+  FoldHorizontal,
+  UnfoldHorizontal,
+  Maximize2,
+  Minimize2,
+  Image as ImageIcon,
+  Printer,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  ChevronDown,
+  ChevronRight,
+} from 'lucide-react';
 import { exportElementToPng } from '@/lib/export-utils';
 
 export interface MindmapBranchItem {
@@ -43,6 +59,22 @@ interface NodeLayout {
   branchIndex?: number;
 }
 
+// Helper to recursively collect all descendant node IDs
+function getDescendantNodeIds(nodeId: string, allNodes: NodeLayout[]): string[] {
+  const result: string[] = [];
+  const queue: string[] = [nodeId];
+  while (queue.length > 0) {
+    const parent = queue.shift()!;
+    for (const node of allNodes) {
+      if (node.parentId === parent) {
+        result.push(node.id);
+        queue.push(node.id);
+      }
+    }
+  }
+  return result;
+}
+
 // Helpers for dynamic height calculation without truncation
 function estimateNodeHeight(text: string, charsPerLine: number, basePadding: number, lineHeight: number) {
   const lineCount = Math.max(1, Math.ceil((text || '').length / charsPerLine));
@@ -82,22 +114,44 @@ export function InteractiveMindmap({
   // Custom dragged node offsets
   const [nodeOffsets, setNodeOffsets] = useState<Record<string, Position>>({});
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
-  const [nodeDragStart, setNodeDragStart] = useState<Position>({ x: 0, y: 0 });
+  const [dragState, setDragState] = useState<{
+    id: string;
+    startMouse: Position;
+    descendantIds: string[];
+    initialOffsets: Record<string, Position>;
+  } | null>(null);
 
   const [isExporting, setIsExporting] = useState(false);
+  const [isFullWindow, setIsFullWindow] = useState(false);
 
   // Sync expanded state when branches change
   useEffect(() => {
-    setExpandedBranches(prev => {
-      const next = { ...prev };
-      branches.forEach((_, idx) => {
-        if (next[idx] === undefined) {
-          next[idx] = true;
-        }
+    const timer = setTimeout(() => {
+      setExpandedBranches(prev => {
+        const next = { ...prev };
+        branches.forEach((_, idx) => {
+          if (next[idx] === undefined) {
+            next[idx] = true;
+          }
+        });
+        return next;
       });
-      return next;
-    });
+    }, 0);
+    return () => clearTimeout(timer);
   }, [branches]);
+
+  // Handle ESC to exit full window
+  useEffect(() => {
+    if (!isFullWindow) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsFullWindow(false);
+        notify('Đã thoát chế độ toàn cửa sổ');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFullWindow, notify]);
 
   const toggleBranch = (idx: number) => {
     setExpandedBranches(prev => ({
@@ -106,16 +160,20 @@ export function InteractiveMindmap({
     }));
   };
 
-  const expandAll = () => {
-    const next: Record<number, boolean> = {};
-    branches.forEach((_, idx) => {
-      next[idx] = true;
-    });
-    setExpandedBranches(next);
-  };
+  const areAllExpanded = branches.length > 0 && branches.every((_, idx) => Boolean(expandedBranches[idx]));
 
-  const collapseAll = () => {
-    setExpandedBranches({});
+  const toggleExpandAll = () => {
+    if (areAllExpanded) {
+      setExpandedBranches({});
+      notify('Đã thu gọn toàn bộ các nhánh');
+    } else {
+      const next: Record<number, boolean> = {};
+      branches.forEach((_, idx) => {
+        next[idx] = true;
+      });
+      setExpandedBranches(next);
+      notify('Đã mở rộng toàn bộ các nhánh');
+    }
   };
 
   // Compute Layout based on Orientation (Horizontal or Vertical)
@@ -448,26 +506,38 @@ export function InteractiveMindmap({
     setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
   };
 
-  // Node Dragging Handlers
+  // Node Dragging Handlers (Moves the dragged node + all its descendants together)
   const handleNodeMouseDown = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setDraggingNodeId(id);
-    const current = nodeOffsets[id] || { x: 0, y: 0 };
-    setNodeDragStart({
-      x: e.clientX - current.x,
-      y: e.clientY - current.y,
+    const descendants = getDescendantNodeIds(id, nodes);
+    setDragState({
+      id,
+      startMouse: { x: e.clientX, y: e.clientY },
+      descendantIds: descendants,
+      initialOffsets: { ...nodeOffsets },
     });
   };
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      if (draggingNodeId) {
-        const newX = e.clientX - nodeDragStart.x;
-        const newY = e.clientY - nodeDragStart.y;
-        setNodeOffsets(prev => ({
-          ...prev,
-          [draggingNodeId]: { x: newX, y: newY },
-        }));
+      if (dragState) {
+        // Divide delta by zoom factor to keep movement 1:1 with mouse cursor
+        const deltaX = (e.clientX - dragState.startMouse.x) / zoom;
+        const deltaY = (e.clientY - dragState.startMouse.y) / zoom;
+        const affectedIds = [dragState.id, ...dragState.descendantIds];
+
+        setNodeOffsets(prev => {
+          const next = { ...prev };
+          affectedIds.forEach(nodeId => {
+            const initial = dragState.initialOffsets[nodeId] || { x: 0, y: 0 };
+            next[nodeId] = {
+              x: initial.x + deltaX,
+              y: initial.y + deltaY,
+            };
+          });
+          return next;
+        });
       } else if (isPanning) {
         setPan({
           x: e.clientX - panStart.x,
@@ -479,9 +549,10 @@ export function InteractiveMindmap({
     const handleMouseUp = () => {
       setIsPanning(false);
       setDraggingNodeId(null);
+      setDragState(null);
     };
 
-    if (isPanning || draggingNodeId) {
+    if (isPanning || dragState) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     }
@@ -490,7 +561,7 @@ export function InteractiveMindmap({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isPanning, panStart, draggingNodeId, nodeDragStart]);
+  }, [isPanning, panStart, dragState, zoom]);
 
   // Zoom controls
   const handleZoom = (delta: number) => {
@@ -513,7 +584,11 @@ export function InteractiveMindmap({
       const sanitizedName = (root || courseTitle || 'NotebookLM_Mindmap')
         .replace(/[^a-zA-Z0-9_\u00C0-\u024F\u1E00-\u1EFF]/g, '_')
         .slice(0, 35);
-      await exportElementToPng(canvasRef.current, `${sanitizedName}_Mindmap_${orientation}`);
+      await exportElementToPng(
+        canvasRef.current,
+        `${sanitizedName}_Mindmap_${orientation}`,
+        { cropToNodes: true, padding: 48, backgroundColor: '#0c0a1f' }
+      );
       notify('Đã tải ảnh PNG thành công!');
     } catch {
       notify('Không thể xuất ảnh PNG. Vui lòng thử lại.');
@@ -523,7 +598,7 @@ export function InteractiveMindmap({
   };
 
   return (
-    <div className="artifact notebook-mindmap-wrapper">
+    <div className={`artifact notebook-mindmap-wrapper ${isFullWindow ? 'is-full-window' : ''}`}>
       {/* Top Header Toolbar */}
       <div className="artifact-head">
         <div>
@@ -545,53 +620,88 @@ export function InteractiveMindmap({
               background: orientation === 'vertical' ? 'rgba(56, 189, 248, 0.2)' : 'rgba(124, 58, 237, 0.2)',
               borderColor: orientation === 'vertical' ? '#38bdf8' : '#8b5cf6',
               color: '#ffffff',
-              fontWeight: 700,
+              fontWeight: 600,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
             }}
             onClick={() => {
               const next = orientation === 'horizontal' ? 'vertical' : 'horizontal';
               setOrientation(next);
               setNodeOffsets({});
-              notify(`Đã chuyển sang hướng ${next === 'horizontal' ? 'Ngang (Left-to-Right)' : 'Dọc (Top-to-Bottom)'}`);
+              notify(`Đã chuyển hướng hiển thị: ${next === 'horizontal' ? 'Ngang (Trái sang Phải)' : 'Dọc (Trên xuống Dưới)'}`);
             }}
-            title="Chuyển đổi giữa sơ đồ dạng ngang và dọc"
+            title="Chuyển đổi hướng bố cục sơ đồ tư duy"
           >
-            {orientation === 'horizontal' ? '⇄ Hướng Ngang' : '⇅ Hướng Dọc'}
+            {orientation === 'horizontal' ? <ArrowLeftRight size={14} /> : <ArrowUpDown size={14} />}
+            {orientation === 'horizontal' ? 'Bố cục Ngang' : 'Bố cục Dọc'}
           </button>
 
           {onReconfigure && (
-            <button className="reconfigure-btn" onClick={onReconfigure}>
-              🔄 Đổi cấp độ / Tạo lại
+            <button
+              className="reconfigure-btn"
+              onClick={onReconfigure}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <RefreshCw size={14} />
+              Cấu hình lại
             </button>
           )}
 
-          <button className="reconfigure-btn" onClick={expandAll} title="Mở rộng toàn bộ nhánh">
-            👁 Mở rộng
+          {/* Single Combined Expand / Collapse Toggle Button */}
+          <button
+            className="reconfigure-btn"
+            onClick={toggleExpandAll}
+            title={areAllExpanded ? 'Thu gọn toàn bộ nhánh' : 'Mở rộng toàn bộ nhánh'}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            {areAllExpanded ? <FoldHorizontal size={14} /> : <UnfoldHorizontal size={14} />}
+            {areAllExpanded ? 'Thu gọn' : 'Mở rộng'}
           </button>
 
-          <button className="reconfigure-btn" onClick={collapseAll} title="Thu gọn toàn bộ nhánh">
-            ⊞ Thu gọn
-          </button>
-
-          <button className="reconfigure-btn" onClick={handleResetView} title="Đặt lại góc nhìn">
-            ↺ Đặt lại
+          {/* Full Window Toggle Button */}
+          <button
+            className="reconfigure-btn"
+            onClick={() => {
+              setIsFullWindow(prev => {
+                const next = !prev;
+                notify(next ? 'Chế độ toàn màn hình (Nhấn phím ESC để thoát)' : 'Đã thoát chế độ toàn màn hình');
+                return next;
+              });
+            }}
+            title={isFullWindow ? 'Thu nhỏ lại (ESC)' : 'Xem toàn cửa sổ'}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            {isFullWindow ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            {isFullWindow ? 'Thu nhỏ' : 'Toàn cửa sổ'}
           </button>
 
           <button
             className="reconfigure-btn"
-            style={{ background: 'rgba(124, 58, 237, 0.25)', borderColor: '#8b5cf6', color: '#ffffff' }}
+            style={{
+              background: 'rgba(124, 58, 237, 0.25)',
+              borderColor: '#8b5cf6',
+              color: '#ffffff',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
             onClick={handleExportPng}
             disabled={isExporting}
           >
-            {isExporting ? 'Đang xuất…' : '🖼 Xuất PNG'}
+            <ImageIcon size={14} />
+            {isExporting ? 'Đang xuất tệp…' : 'Xuất ảnh PNG'}
           </button>
 
           <button
             onClick={() => {
               window.print();
-              notify('Đã mở hộp thoại in / xuất PDF');
+              notify('Đã mở giao diện in / lưu PDF');
             }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >
-            ↓ In / PDF
+            <Printer size={14} />
+            In tài liệu
           </button>
         </div>
       </div>
@@ -603,12 +713,18 @@ export function InteractiveMindmap({
         onMouseDown={handleCanvasMouseDown}
         style={{ cursor: isPanning ? 'grabbing' : 'grab' }}
       >
-        {/* Floating Zoom Controls */}
+        {/* Floating Zoom Controls (with single reset button) */}
         <div className="canvas-zoom-controls">
-          <button type="button" onClick={() => handleZoom(0.15)} title="Phóng to">＋</button>
+          <button type="button" onClick={() => handleZoom(0.15)} title="Phóng to" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <ZoomIn size={15} />
+          </button>
           <span>{Math.round(zoom * 100)}%</span>
-          <button type="button" onClick={() => handleZoom(-0.15)} title="Thu nhỏ">－</button>
-          <button type="button" onClick={handleResetView} title="Căn giữa">⊙</button>
+          <button type="button" onClick={() => handleZoom(-0.15)} title="Thu nhỏ" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <ZoomOut size={15} />
+          </button>
+          <button type="button" onClick={handleResetView} title="Đặt lại góc nhìn / Căn giữa" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <RotateCcw size={15} />
+          </button>
         </div>
 
         {/* Scaled and Panned Canvas */}
@@ -727,19 +843,20 @@ export function InteractiveMindmap({
                     </span>
                   </div>
 
-                  {node.hasChildren && (
-                    <button
-                      type="button"
-                      className="node-toggle-btn"
-                      onClick={e => {
-                        e.stopPropagation();
-                        toggleBranch(bIdx);
-                      }}
-                      title={isExpanded ? 'Thu gọn nhánh này' : 'Mở rộng nhánh này'}
-                    >
-                      {isExpanded ? '▾' : '▸'}
-                    </button>
-                  )}
+                    {node.hasChildren && (
+                      <button
+                        type="button"
+                        className="node-toggle-btn"
+                        onClick={e => {
+                          e.stopPropagation();
+                          toggleBranch(bIdx);
+                        }}
+                        title={isExpanded ? 'Thu gọn nhánh này' : 'Mở rộng nhánh này'}
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      >
+                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </button>
+                    )}
 
                   {orientation === 'horizontal' ? (
                     <div className="node-anchor right" />
