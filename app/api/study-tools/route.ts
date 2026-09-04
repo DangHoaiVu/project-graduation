@@ -15,7 +15,7 @@ interface SourceItem {
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
-      type?: 'summary' | 'mindmap' | 'flashcards';
+      type?: 'summary' | 'mindmap' | 'flashcards' | 'slides' | 'slide' | 'presentation';
       topic?: string;
       course?: string;
       courseCode?: string;
@@ -169,6 +169,27 @@ export async function POST(request: Request) {
         levelInstruction = 'CẤP ĐỘ TIÊU CHUẨN: Sơ đồ tư duy 4-6 nhánh cân đối, mỗi nhánh chứa 3-4 khái niệm cốt lõi.';
         shapeDesc = '{ "root": "Chủ đề chính", "branches": [ { "title": "Nhánh 1", "items": ["Mục 1", "Mục 2", "Mục 3"] } ] }';
       }
+    } else if (toolType === 'slides' || toolType === 'slide' || toolType === 'presentation') {
+      const slideCount = level === 'simple' ? '4-6' : level === 'complex' ? '10-14' : '7-9';
+      levelInstruction = `CẤP ĐỘ ${level.toUpperCase()}: Tạo chính xác một bộ slide bài giảng (${slideCount} trang slide). Cấu trúc bao gồm:
+      - Trang 1: Slide Tiêu đề & Giới thiệu bài giảng
+      - Các trang tiếp theo: Trọng tâm kiến thức, định nghĩa, phân tích chuyên môn, ví dụ thực tế / ứng dụng
+      - Trang kết thúc: Tổng kết bài giảng & Câu hỏi thảo luận
+      Mỗi slide phải có title (tiêu đề trang), subtitle (tiêu đề phụ ngắn nếu có), bullets (danh sách 3-5 ý chính rõ ràng), keyTakeaway (1 câu đúc kết ghi nhớ quan trọng), và notes (lời dẫn thuyết trình chi tiết cho giảng viên/người trình bày).`;
+      shapeDesc = `{
+  "title": "Tiêu đề bài giảng / Bài thuyết trình",
+  "topic": "${topic}",
+  "slides": [
+    {
+      "slideNumber": 1,
+      "title": "Tên Slide",
+      "subtitle": "Phụ đề / Ngữ cảnh",
+      "bullets": ["Ý chính 1", "Ý chính 2", "Ý chính 3"],
+      "keyTakeaway": "Điểm cốt lõi cần nhớ",
+      "notes": "Lời giảng chi tiết cho giảng viên khi thuyết trình trang này..."
+    }
+  ]
+}`;
     } else {
       // flashcards
       const cardCount = level === 'simple' ? 5 : level === 'complex' ? 15 : 10;
@@ -208,7 +229,12 @@ Không bao gồm bất kỳ văn bản ngoài hay markdown.`;
 
       if (result.text) {
         const parsed = JSON.parse(result.text);
-        const data = toolType === 'flashcards' ? (parsed.flashcards || parsed.cards || (Array.isArray(parsed) ? parsed : [])) : parsed;
+        let data: unknown = parsed;
+        if (toolType === 'flashcards') {
+          data = parsed.flashcards || parsed.cards || (Array.isArray(parsed) ? parsed : []);
+        } else if (toolType === 'slides' || toolType === 'slide' || toolType === 'presentation') {
+          data = parsed.slides ? parsed : { title: topic, topic, slides: Array.isArray(parsed) ? parsed : [] };
+        }
         return NextResponse.json({ data, mode: 'ai', level });
       }
     } catch (err) {

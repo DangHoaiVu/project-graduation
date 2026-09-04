@@ -23,6 +23,7 @@ import {
   Search,
   Sliders,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   AlertCircle,
   Users,
@@ -32,10 +33,480 @@ import {
   Lock,
   BookX,
   CheckSquare,
+  MessageSquare,
+  Zap,
+  Printer,
+  FileDown,
+  RotateCcw,
+  Folder,
+  Layers,
+  GitFork,
+  Layout,
 } from 'lucide-react';
-import type { Course, ChatMessage, CitationSource } from '@/app/types';
+import type { Course, ChatMessage, CitationSource, CourseSourceItem, StudyToolResponse } from '@/app/types';
 import { convertQuestionsToMoodleXml, type QuizQuestionItem } from '@/app/lib/moodle-xml';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
+import { InteractiveMindmap } from '@/app/components/InteractiveMindmap';
+import { SlidePresentation } from '@/app/components/SlidePresentation';
+import type { SlideDeckData } from '@/lib/pptx-export';
+import { exportSummaryToDocx, copyRichHtmlForWord } from '@/lib/export-utils';
+
+/* ── Flashcards Component ────────────────────────────────── */
+
+function Flashcards({
+  initial,
+  courseTitle,
+  notify,
+}: {
+  initial: Array<{ front: string; back: string }>;
+  courseTitle: string;
+  notify: (s: string) => void;
+}) {
+  const [cards, setCards] = useState(initial);
+  const [i, setI] = useState(0);
+  const [flip, setFlip] = useState(false);
+
+  const add = () => {
+    const front = window.prompt('Nhập nội dung mặt trước của thẻ:');
+    if (!front) return;
+    const back = window.prompt('Nhập nội dung mặt sau của thẻ:');
+    if (!back) return;
+    setCards(v => [...v, { front, back }]);
+    setI(cards.length);
+    setFlip(false);
+    notify('Đã thêm thẻ ghi nhớ mới');
+  };
+
+  return (
+    <div className="artifact flash">
+      <div className="artifact-head">
+        <div>
+          <h2>Bộ thẻ ghi nhớ: {courseTitle}</h2>
+          <p>
+            {cards.length > 0 ? `Thẻ ${i + 1} / ${cards.length}` : 'Chưa có thẻ nào'}
+          </p>
+        </div>
+        <button onClick={add} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          <Plus size={14} />
+          Thêm thẻ
+        </button>
+      </div>
+
+      {cards.length > 0 ? (
+        <button className={`flash-card ${flip ? 'flipped' : ''}`} onClick={() => setFlip(!flip)}>
+          <small>{flip ? 'GIẢI THÍCH / ĐÁP ÁN' : 'KHÁI NIỆM / CÂU HỎI'}</small>
+          <strong>{flip ? cards[i]?.back : cards[i]?.front}</strong>
+          <span>Nhấn để lật thẻ</span>
+        </button>
+      ) : (
+        <div className="empty-state">Chưa có thẻ ghi nhớ nào. Nhấn "Thêm thẻ" để tạo mới.</div>
+      )}
+
+      {cards.length > 0 && (
+        <div className="card-nav">
+          <button
+            onClick={() => {
+              setI((i + cards.length - 1) % cards.length);
+              setFlip(false);
+            }}
+            title="Thẻ trước đó"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <div>
+            {cards.map((_, x) => (
+              <i className={x === i ? 'on' : ''} key={x} />
+            ))}
+          </div>
+          <button
+            onClick={() => {
+              setI((i + 1) % cards.length);
+              setFlip(false);
+            }}
+            title="Thẻ tiếp theo"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Study Artifact Component ────────────────────────────── */
+
+interface GeneratedArtifact {
+  data: unknown;
+  level: 'simple' | 'standard' | 'complex';
+  topic: string;
+}
+
+function StudyArtifact({
+  type,
+  artifact,
+  courseTitle,
+  loading,
+  selectedSourcesCount,
+  onGenerate,
+  onReset,
+  copyText,
+  notify,
+}: {
+  type: string;
+  artifact: GeneratedArtifact | null;
+  courseTitle: string;
+  loading: boolean;
+  selectedSourcesCount: number;
+  onGenerate: (level: 'simple' | 'standard' | 'complex', topic: string, allowExternal: boolean) => void;
+  onReset: () => void;
+  copyText: (s: string) => void;
+  notify: (s: string) => void;
+}) {
+  const [selectedLevel, setSelectedLevel] = useState<'simple' | 'standard' | 'complex'>('standard');
+  const [topicInput, setTopicInput] = useState('');
+  const [allowExternal, setAllowExternal] = useState<boolean>(false);
+
+  const toolIcon =
+    type === 'Tóm tắt' ? (
+      <FileText size={20} />
+    ) : type === 'Mindmap' ? (
+      <GitFork size={20} />
+    ) : type === 'Slide' ? (
+      <Layout size={20} />
+    ) : (
+      <Layers size={20} />
+    );
+
+  const toolName =
+    type === 'Tóm tắt'
+      ? 'Bản tóm tắt bài giảng'
+      : type === 'Mindmap'
+      ? 'Sơ đồ tư duy (Mindmap)'
+      : type === 'Slide'
+      ? 'Slide bài giảng (PowerPoint)'
+      : 'Bộ thẻ ghi nhớ (Flashcards)';
+
+  if (loading) {
+    return (
+      <div className="artifact artifact-loading">
+        <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Sparkles size={16} />
+        </span>
+        <h3>Đang phân tích tài liệu và khởi tạo {type.toLowerCase()} cấp độ {selectedLevel === 'simple' ? 'Cơ bản' : selectedLevel === 'complex' ? 'Chuyên sâu' : 'Tiêu chuẩn'}…</h3>
+        <div className="typing">
+          <i />
+          <i />
+          <i />
+        </div>
+      </div>
+    );
+  }
+
+  if (!artifact) {
+    return (
+      <div className="tool-config-panel">
+        <div className="tool-config-head">
+          <div className="tool-icon-box" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{toolIcon}</div>
+          <div>
+            <h3>Khởi tạo {toolName}</h3>
+            <p>Phân tích và tổng hợp dựa trên {selectedSourcesCount} nguồn tài liệu đã chọn của môn {courseTitle}.</p>
+          </div>
+        </div>
+
+        <div>
+          <div className="tool-section-label">1. CHỌN MỨC ĐỘ CHI TIẾT</div>
+          <div className="level-selector">
+            <button
+              type="button"
+              className={`level-card ${selectedLevel === 'simple' ? 'active' : ''}`}
+              onClick={() => setSelectedLevel('simple')}
+            >
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Zap size={14} />
+                Cơ bản
+              </strong>
+              <small>3-4 luận điểm trọng tâm, tổng hợp nhanh trong 1-2 phút</small>
+            </button>
+
+            <button
+              type="button"
+              className={`level-card ${selectedLevel === 'standard' ? 'active' : ''}`}
+              onClick={() => setSelectedLevel('standard')}
+            >
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <BookOpen size={14} />
+                Tiêu chuẩn
+              </strong>
+              <small>Cấu trúc mạch lạc, 5-7 luận điểm cân đối, dễ tiếp thu</small>
+            </button>
+
+            <button
+              type="button"
+              className={`level-card ${selectedLevel === 'complex' ? 'active' : ''}`}
+              onClick={() => setSelectedLevel('complex')}
+            >
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Sparkles size={14} />
+                Chuyên sâu
+              </strong>
+              <small>Phân tích đa chiều, đào sâu nguyên lý, công thức và ví dụ thực tế</small>
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <div className="tool-section-label">2. CHỦ ĐỀ / PHẠM VI TRỌNG TÂM (TÙY CHỌN)</div>
+          <input
+            className="tool-topic-input"
+            value={topicInput}
+            onChange={e => setTopicInput(e.target.value)}
+            placeholder={`Để trống để phân tích toàn bộ môn ${courseTitle}, hoặc nhập chuyên đề...`}
+          />
+        </div>
+
+        <div>
+          <div className="tool-section-label">3. PHẠM VI DỮ LIỆU THAM KHẢO</div>
+          <button
+            type="button"
+            className={`level-card ${allowExternal ? 'active' : ''}`}
+            onClick={() => setAllowExternal(prev => !prev)}
+            style={{ width: '100%' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {allowExternal ? <Globe size={15} /> : <Lock size={15} />}
+                {allowExternal ? 'Cho phép liên hệ kiến thức thực tiễn bên ngoài' : 'Bám sát nghiêm ngặt tài liệu được cung cấp'}
+              </strong>
+              <span className="level-badge" style={{ background: allowExternal ? 'rgba(56, 189, 248, 0.2)' : undefined }}>
+                {allowExternal ? 'BẬT' : 'TẮT'}
+              </span>
+            </div>
+            <small>
+              {allowExternal
+                ? 'Cho phép AI liên hệ thực tế ngành, ứng dụng hiện đại và mở rộng tư duy chuyên môn.'
+                : 'AI phân tích nghiêm ngặt chỉ dựa trên nội dung tài liệu môn học được cung cấp.'}
+            </small>
+          </button>
+        </div>
+
+        <button
+          type="button"
+          className="generate-tool-btn"
+          onClick={() => onGenerate(selectedLevel, topicInput.trim() || courseTitle, allowExternal)}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+        >
+          <Sparkles size={16} />
+          Bắt đầu khởi tạo {type}
+        </button>
+      </div>
+    );
+  }
+
+  const levelLabel =
+    artifact.level === 'simple' ? 'Cơ bản' : artifact.level === 'complex' ? 'Chuyên sâu' : 'Tiêu chuẩn';
+
+  if (type === 'Slide') {
+    return (
+      <SlidePresentation
+        initialDeck={artifact.data as SlideDeckData}
+        courseTitle={courseTitle}
+        levelLabel={levelLabel}
+        topic={artifact.topic}
+        onReconfigure={onReset}
+        notify={notify}
+      />
+    );
+  }
+
+  if (type === 'Mindmap') {
+    const map = artifact.data as { root: string; branches: Array<{ title: string; items: string[] }> };
+    return (
+      <InteractiveMindmap
+        root={map.root || courseTitle}
+        branches={map.branches || []}
+        courseTitle={courseTitle}
+        levelLabel={levelLabel}
+        topic={artifact.topic}
+        onReconfigure={onReset}
+        notify={notify}
+      />
+    );
+  }
+
+  if (type === 'Flashcard') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span className="level-badge">{levelLabel}</span>
+            <small style={{ color: '#94a3b8' }}>Chủ đề: {artifact.topic}</small>
+          </div>
+          <button
+            className="reconfigure-btn"
+            onClick={onReset}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            <RotateCcw size={14} />
+            Cấu hình lại
+          </button>
+        </div>
+        <Flashcards
+          initial={artifact.data as Array<{ front: string; back: string }>}
+          courseTitle={courseTitle}
+          notify={notify}
+        />
+      </div>
+    );
+  }
+
+  // Summary
+  const summary = artifact.data as { title: string; overview: string; points: string[] };
+  const text = `${summary.title}\n\n${summary.overview}\n\n${(summary.points ?? []).map(x => `• ${x}`).join('\n')}`;
+
+  const handleExportDocx = async () => {
+    try {
+      notify('Đang xuất tài liệu Word (.docx)…');
+      await exportSummaryToDocx(summary, courseTitle);
+      notify('Đã tải tệp Word (.docx) thành công');
+    } catch {
+      notify('Không thể xuất tệp Word.');
+    }
+  };
+
+  return (
+    <div className="artifact summary">
+      <div className="artifact-head">
+        <div>
+          <h2>{summary.title || `Tóm tắt: ${courseTitle}`}</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+            <span className="level-badge">{levelLabel}</span>
+            <small style={{ color: '#94a3b8' }}>Chủ đề: {artifact.topic}</small>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            className="reconfigure-btn"
+            onClick={onReset}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            <RotateCcw size={14} />
+            Cấu hình lại
+          </button>
+          <button
+            className="reconfigure-btn"
+            onClick={() => void copyText(text)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            <Copy size={14} />
+            Sao chép
+          </button>
+          <button
+            className="reconfigure-btn"
+            style={{
+              background: 'rgba(59, 130, 246, 0.25)',
+              borderColor: '#3b82f6',
+              color: '#ffffff',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+            onClick={() => void handleExportDocx()}
+          >
+            <FileDown size={14} />
+            Xuất Word (.docx)
+          </button>
+          <button
+            onClick={() => {
+              window.print();
+              notify('Đã mở giao diện in / lưu PDF');
+            }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            <Printer size={14} />
+            In tài liệu
+          </button>
+        </div>
+      </div>
+      <h3>Tổng quan</h3>
+      <p>{summary.overview}</p>
+      <h3>Nội dung chính</h3>
+      <ul>
+        {(summary.points ?? []).map(p => (
+          <li key={p}>{p}</li>
+        ))}
+      </ul>
+      <div className="source-note" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <FileText size={14} />
+        Tổng hợp dựa trên {selectedSourcesCount} tài liệu môn học. Vui lòng đối chiếu với giáo trình chính thức khi giảng dạy &amp; ôn tập.
+      </div>
+    </div>
+  );
+}
+
+/* ── Source Validation & Badge Helper ─────────────────────── */
+
+function isValidKnowledgeSource(typeOrItem: string | { type?: string; name: string }, nameArg?: string) {
+  let t = '';
+  let n = '';
+  if (typeof typeOrItem === 'object' && typeOrItem !== null) {
+    t = (typeOrItem.type || '').toLowerCase();
+    n = (typeOrItem.name || '').toLowerCase();
+  } else {
+    t = (typeOrItem || '').toLowerCase();
+    n = (nameArg || '').toLowerCase();
+  }
+
+  // Exclude Announcements / Forums / Quizzes / Assignments / Exams / Homework
+  if (
+    t.includes('forum') ||
+    t.includes('assign') ||
+    t.includes('quiz') ||
+    t.includes('exam') ||
+    t.includes('homework') ||
+    t.includes('feedback') ||
+    t.includes('survey') ||
+    n.includes('announcement') ||
+    n.includes('thông báo') ||
+    n.includes('diễn đàn tin tức') ||
+    n.includes('bài tập về nhà') ||
+    n.includes('bài kiểm tra') ||
+    n.includes('thi kết thúc')
+  ) {
+    return false;
+  }
+
+  // Allow PDF
+  if (t === 'pdf' || n.endsWith('.pdf')) return true;
+
+  // Allow Word (.doc, .docx)
+  if (t.includes('doc') || t.includes('word') || n.endsWith('.docx') || n.endsWith('.doc')) return true;
+
+  // Allow Web Link (http, https, url, link)
+  if (t === 'url' || t === 'link' || n.startsWith('http://') || n.startsWith('https://') || n.includes('.link')) return true;
+
+  // Allow PPT (.ppt, .pptx) / Text (.txt)
+  if (t.includes('ppt') || n.endsWith('.pptx') || n.endsWith('.ppt') || t === 'txt' || n.endsWith('.txt')) return true;
+
+  return false;
+}
+
+function getSourceBadge(type: string, name: string): { label: React.ReactNode; className: string } {
+  const upperType = (type || '').toUpperCase();
+  const lowerName = name.toLowerCase();
+
+  if (upperType === 'LINK' || upperType === 'URL' || lowerName.startsWith('http') || lowerName.includes('.link')) {
+    return { label: <Globe size={14} />, className: 'link-badge' };
+  }
+  if (upperType === 'DOCX' || upperType === 'DOC' || lowerName.endsWith('.docx') || lowerName.endsWith('.doc')) {
+    return { label: 'W', className: 'word-badge' };
+  }
+  if (upperType === 'PPTX' || upperType === 'PPT' || lowerName.endsWith('.pptx') || lowerName.endsWith('.ppt')) {
+    return { label: 'P', className: 'ppt-badge' };
+  }
+  return { label: 'P', className: 'pdf-badge' };
+}
 
 interface MoodleStudent {
   id: number;
@@ -147,8 +618,32 @@ export function TeacherPortal({
   const [showGuideModal, setShowGuideModal] = useState(false);
 
   // --------------------------------------------------------------------------
-  // Tab 3: Teacher AI Assistant Chat states
+  // Tab 3: Teacher AI Assistant Chat & Study Tools states
   // --------------------------------------------------------------------------
+  const [portalSources, setPortalSources] = useState<CourseSourceItem[]>(sources as CourseSourceItem[]);
+  const [checkedSources, setCheckedSources] = useState<boolean[]>(() => new Array(sources.length).fill(true));
+  const [sourceQuery, setSourceQuery] = useState('');
+  const [isSourcePanelCollapsed, setIsSourcePanelCollapsed] = useState(false);
+  const [allowExternalSource, setAllowExternalSource] = useState(false);
+  const [answerStyle, setAnswerStyle] = useState<'concise' | 'detailed'>('concise');
+  const [tool, setTool] = useState('Chat');
+  const [artifactsMap, setArtifactsMap] = useState<Record<string, GeneratedArtifact>>({});
+  const [artifactLoading, setArtifactLoading] = useState(false);
+  const [toast, setToast] = useState('');
+
+  // Student/Teacher Resource Upload Modal states
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadTab, setUploadTab] = useState<'file' | 'url' | 'text'>('file');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadFileTitle, setUploadFileTitle] = useState('');
+  const [uploadUrl, setUploadUrl] = useState('');
+  const [uploadUrlTitle, setUploadUrlTitle] = useState('');
+  const [uploadTextTitle, setUploadTextTitle] = useState('');
+  const [uploadTextContent, setUploadTextContent] = useState('');
+  const [uploadLoading, setUploadLoading] = useState(false);
+  const [uploadDragActive, setUploadDragActive] = useState(false);
+  const uploadFileInputRef = useRef<HTMLInputElement>(null);
+
   const [assistantChat, setAssistantChat] = useState<ChatMessage[]>([]);
   const [assistantInput, setAssistantInput] = useState('');
   const [assistantLoading, setAssistantLoading] = useState(false);
@@ -157,12 +652,211 @@ export function TeacherPortal({
   const assistantAbortRef = useRef<AbortController | null>(null);
   const chatMessagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Sync sources prop
+  useEffect(() => {
+    setPortalSources(sources as CourseSourceItem[]);
+    setCheckedSources(new Array(sources.length).fill(true));
+  }, [sources]);
+
+  const notify = (text: string) => {
+    setToast(text);
+    window.setTimeout(() => setToast(''), 2600);
+  };
+
+  const copyText = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    notify('Đã sao chép vào bộ nhớ tạm');
+  };
+
+  const openTool = (toolName: string) => {
+    setTool(toolName);
+  };
+
+  // Auto-collapse source panel on compact windows
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 880) {
+      setIsSourcePanelCollapsed(true);
+    }
+  }, []);
+
   // Auto-scroll chat to bottom
   useEffect(() => {
-    if (activeTab === 'assistant') {
+    if (activeTab === 'assistant' && tool === 'Chat') {
       chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [assistantChat, activeTab]);
+  }, [assistantChat, activeTab, tool, assistantLoading]);
+
+  // Generate Tool Artifact (Summary, Mindmap, Flashcards)
+  const generateToolArtifact = async (
+    toolType: string,
+    level: 'simple' | 'standard' | 'complex',
+    topic: string,
+    allowExternal?: boolean
+  ) => {
+    setArtifactLoading(true);
+    const selectedSources = portalSources.filter((_, i) => checkedSources[i]);
+    const selectedSourceNames = selectedSources.map(s => s.name);
+    const apiType =
+      toolType === 'Tóm tắt'
+        ? 'summary'
+        : toolType === 'Mindmap'
+        ? 'mindmap'
+        : toolType === 'Slide'
+        ? 'slides'
+        : 'flashcards';
+    const curCourse = courses.find(c => String(c.id) === String(selectedCourseId) || c.code === String(selectedCourseId));
+    const courseTitle = curCourse ? curCourse.name : 'Môn học';
+    const effectiveAllowExternal = allowExternal !== undefined ? allowExternal : allowExternalSource;
+
+    try {
+      const res = await fetch('/api/study-tools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: apiType,
+          topic: topic || courseTitle,
+          course: `${courseTitle} (${curCourse?.code || ''})`,
+          courseId: curCourse?.id || selectedCourseId,
+          courseCode: curCourse?.code || '',
+          sources: selectedSources,
+          sourceNames: selectedSourceNames,
+          level,
+          allowExternalSource: effectiveAllowExternal,
+          model: assistantModel,
+        }),
+      });
+      const data = (await res.json()) as StudyToolResponse;
+      if (!res.ok) throw new Error(data.error);
+
+      setArtifactsMap(prev => ({
+        ...prev,
+        [toolType]: {
+          data: data.data,
+          level,
+          topic: topic || courseTitle,
+        },
+      }));
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Không thể tạo học liệu.');
+    } finally {
+      setArtifactLoading(false);
+    }
+  };
+
+  const resetToolArtifact = (toolType: string) => {
+    setArtifactsMap(prev => {
+      const updated = { ...prev };
+      delete updated[toolType];
+      return updated;
+    });
+  };
+
+  // Upload handler for adding documents
+  const handleUploadSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const curCourse = courses.find(c => String(c.id) === String(selectedCourseId) || c.code === String(selectedCourseId));
+    const courseCode = curCourse?.code || 'COURSE';
+    const courseId = curCourse?.id || selectedCourseId;
+
+    if (uploadTab === 'file') {
+      if (!uploadFile) {
+        notify('Vui lòng chọn hoặc kéo thả một tệp tài liệu.');
+        return;
+      }
+      setUploadLoading(true);
+      try {
+        const fileName = uploadFileTitle.trim() || uploadFile.name;
+        const ext = uploadFile.name.split('.').pop()?.toLowerCase() || '';
+        let type: 'PDF' | 'DOCX' | 'PPTX' | 'TXT' | 'FILE' = 'FILE';
+        if (ext === 'pdf') type = 'PDF';
+        else if (ext === 'docx' || ext === 'doc') type = 'DOCX';
+        else if (ext === 'pptx' || ext === 'ppt') type = 'PPTX';
+        else if (ext === 'txt') type = 'TXT';
+
+        let content = '';
+        if (ext === 'txt') {
+          content = await uploadFile.text();
+        }
+
+        try {
+          const formData = new FormData();
+          formData.append('file', uploadFile);
+          formData.append('title', fileName);
+          formData.append('courseId', courseCode);
+          if (courseId) formData.append('moodleCourseId', String(courseId));
+          if (content) formData.append('content', content);
+
+          await fetch('/api/documents/process', {
+            method: 'POST',
+            body: formData,
+          });
+        } catch (err) {
+          console.warn('Document indexing note:', err);
+        }
+
+        const sizeStr = (uploadFile.size / (1024 * 1024)).toFixed(1) + ' MB';
+        const newItem: CourseSourceItem = {
+          name: fileName,
+          type,
+          sizeOrPages: `Tệp đã nạp · ${sizeStr}`,
+          courseCode,
+        };
+
+        setPortalSources(v => [newItem, ...v]);
+        setCheckedSources(v => [true, ...v]);
+        setShowUploadModal(false);
+        setUploadFile(null);
+        setUploadFileTitle('');
+        notify(`Đã nạp thành công tài liệu: "${fileName}"`);
+      } catch (err) {
+        notify(err instanceof Error ? err.message : 'Tải tài liệu thất bại.');
+      } finally {
+        setUploadLoading(false);
+      }
+    } else if (uploadTab === 'url') {
+      if (!uploadUrl.trim()) {
+        notify('Vui lòng nhập đường dẫn liên kết.');
+        return;
+      }
+      const cleanUrl = uploadUrl.trim();
+      if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+        notify('Đường dẫn phải bắt đầu bằng http:// hoặc https://');
+        return;
+      }
+      const title = uploadUrlTitle.trim() || cleanUrl;
+      const newItem: CourseSourceItem = {
+        name: title,
+        type: 'LINK',
+        sizeOrPages: 'Liên kết web',
+        url: cleanUrl,
+        courseCode,
+      };
+      setPortalSources(v => [newItem, ...v]);
+      setCheckedSources(v => [true, ...v]);
+      setShowUploadModal(false);
+      setUploadUrl('');
+      setUploadUrlTitle('');
+      notify(`Đã thêm liên kết: "${title}"`);
+    } else if (uploadTab === 'text') {
+      if (!uploadTextContent.trim()) {
+        notify('Vui lòng nhập nội dung ghi chú.');
+        return;
+      }
+      const title = uploadTextTitle.trim() || 'Ghi chú bài học mới';
+      const newItem: CourseSourceItem = {
+        name: title,
+        type: 'TXT',
+        sizeOrPages: 'Ghi chú cá nhân',
+        courseCode,
+      };
+      setPortalSources(v => [newItem, ...v]);
+      setCheckedSources(v => [true, ...v]);
+      setShowUploadModal(false);
+      setUploadTextTitle('');
+      setUploadTextContent('');
+      notify(`Đã lưu ghi chú: "${title}"`);
+    }
+  };
 
   // Fetch course students & grade columns whenever selected course changes
   useEffect(() => {
@@ -319,9 +1013,34 @@ export function TeacherPortal({
     });
   }, [activeStudents, gradebookSearch, sortBy, gradebookScores, selectedGradeColumnId, displayedGradeColumns]);
 
+  const curCourse = useMemo(() => {
+    return courses.find(c => String(c.id) === String(selectedCourseId) || c.code === String(selectedCourseId)) || courses[0];
+  }, [courses, selectedCourseId]);
+  const curCourseTitle = curCourse ? curCourse.name : 'môn học';
+
+  const visibleSources = useMemo(() => {
+    return portalSources
+      .map((item, i) => ({ item, i }))
+      .filter(({ item }) => {
+        if (!isValidKnowledgeSource(item)) return false;
+        if (!sourceQuery.trim()) return true;
+        const q = sourceQuery.toLowerCase();
+        return (
+          item.name.toLowerCase().includes(q) ||
+          (item.type && item.type.toLowerCase().includes(q)) ||
+          (item.sizeOrPages && item.sizeOrPages.toLowerCase().includes(q))
+        );
+      });
+  }, [portalSources, sourceQuery]);
+
+  const selectedSourceNames = useMemo(() => {
+    return portalSources
+      .filter((item, i) => (checkedSources[i] ?? true) && isValidKnowledgeSource(item))
+      .map(item => item.name);
+  }, [portalSources, checkedSources]);
+
   // Initialize Teacher Assistant welcome message
   useEffect(() => {
-    const curCourse = courses.find(c => String(c.id) === String(selectedCourseId) || c.code === String(selectedCourseId));
     const courseTitle = curCourse ? curCourse.name : 'môn học';
     if (assistantChat.length === 0) {
       setAssistantChat([
@@ -331,7 +1050,7 @@ export function TeacherPortal({
         },
       ]);
     }
-  }, [selectedCourseId, courses, assistantChat.length]);
+  }, [curCourse, assistantChat.length]);
 
   const askAssistant = async (customPrompt?: string) => {
     if (assistantLoading) {
@@ -355,12 +1074,7 @@ export function TeacherPortal({
     assistantAbortRef.current = controller;
 
     const curCourse = courses.find(c => String(c.id) === String(selectedCourseId) || c.code === String(selectedCourseId));
-
-    const currentCourseSources = sources.filter(s => {
-      if (s.courseId && String(s.courseId) === String(selectedCourseId)) return true;
-      if (curCourse && s.courseCode && s.courseCode.toLowerCase() === curCourse.code.toLowerCase()) return true;
-      return true;
-    });
+    const selectedSources = portalSources.filter((_, i) => checkedSources[i]);
 
     try {
       const res = await fetch('/api/teacher/assistant', {
@@ -372,9 +1086,12 @@ export function TeacherPortal({
           course: curCourse?.name || 'Khóa học',
           courseCode: curCourse?.code || '',
           courseId: curCourse?.id || selectedCourseId,
-          sources: currentCourseSources.map(s => ({ name: s.name, url: s.url, type: s.type })),
+          sources: selectedSources.map(s => ({ name: s.name, url: s.url, type: s.type })),
+          sourceNames: selectedSources.map(s => s.name),
           history: assistantChat.slice(1).map(c => ({ role: c.role, text: c.text })),
           model: assistantModel,
+          allowExternalSource,
+          answerStyle,
           students: activeStudents.map(s => ({
             id: s.id,
             fullname: s.fullname,
@@ -420,6 +1137,40 @@ export function TeacherPortal({
     }
   };
 
+  const stopGeneration = () => {
+    if (assistantAbortRef.current) {
+      assistantAbortRef.current.abort();
+      assistantAbortRef.current = null;
+    }
+    setAssistantLoading(false);
+    setAssistantChat(v => [
+      ...v,
+      {
+        role: 'ai',
+        text: '*(Đã dừng câu trả lời theo yêu cầu)*',
+        sources: [],
+      },
+    ]);
+  };
+
+  const handleClearChat = () => {
+    if (assistantChat.length <= 1) return;
+    const ok = window.confirm(
+      'Bạn có chắc chắn muốn xóa toàn bộ lịch sử trò chuyện môn học này không? Hành động này sẽ làm mới toàn bộ đoạn hội thoại.'
+    );
+    if (!ok) return;
+
+    const curCourse = courses.find(c => String(c.id) === String(selectedCourseId) || c.code === String(selectedCourseId));
+    setAssistantChat([
+      {
+        role: 'ai',
+        text: `Trợ lý AI Giảng dạy môn **${curCourse?.name || 'môn học'}** đã sẵn sàng. Bạn có thể yêu cầu đề xuất tài liệu học tập, soạn bài tập, lập kế hoạch bài giảng hoặc phân tích kết quả sổ điểm.`,
+      },
+    ]);
+    setAssistantInput('');
+    notify('Đã xóa lịch sử trò chuyện');
+  };
+
   const transferToQuizTab = (text: string) => {
     setQuizDocumentText(text);
     setActiveTab('quiz');
@@ -429,9 +1180,15 @@ export function TeacherPortal({
     });
   };
 
-  const copyMessageText = (text: string, idx: number) => {
-    navigator.clipboard.writeText(text);
+  const copyMessageText = async (text: string, idx: number) => {
+    const el = document.getElementById(`teacher-chat-msg-${idx}`);
+    if (el) {
+      await copyRichHtmlForWord(el, text);
+    } else {
+      await navigator.clipboard.writeText(text);
+    }
     setCopiedMsgIdx(idx);
+    notify('Đã sao chép nội dung câu trả lời');
     setTimeout(() => setCopiedMsgIdx(null), 2000);
   };
 
@@ -990,7 +1747,7 @@ export function TeacherPortal({
                       <optgroup label="Khóa học bạn giảng dạy">
                         {teaching.map(c => (
                           <option key={c.id || c.code} value={c.id || c.code}>
-                            {c.name} ({c.code})
+                            {c.code}
                           </option>
                         ))}
                       </optgroup>
@@ -999,7 +1756,7 @@ export function TeacherPortal({
                       <optgroup label={teaching.length > 0 ? 'Khóa học khác / đang học' : 'Tất cả khóa học'}>
                         {other.map(c => (
                           <option key={c.id || c.code} value={c.id || c.code}>
-                            {c.name} ({c.code})
+                            {c.code}
                           </option>
                         ))}
                       </optgroup>
@@ -1007,7 +1764,7 @@ export function TeacherPortal({
                     {teaching.length === 0 && other.length === 0 && (
                       courses.map(c => (
                         <option key={c.id || c.code} value={c.id || c.code}>
-                          {c.name} ({c.code})
+                          {c.code}
                         </option>
                       ))
                     )}
@@ -1020,14 +1777,14 @@ export function TeacherPortal({
       )}
 
       {/* Tabs */}
-      <div className="teacher-tabs-container">
+      <div className={`teacher-tabs-container ${activeTab === 'assistant' ? 'assistant-mode' : ''}`}>
         <button
           type="button"
           onClick={() => handleTabChange('assistant')}
           className={`teacher-tab-btn ${activeTab === 'assistant' ? 'active' : ''}`}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
         >
-          <Bot size={15} />
+          <Bot size={14} />
           <span>Trợ Lý Giảng Dạy</span>
         </button>
 
@@ -1035,9 +1792,9 @@ export function TeacherPortal({
           type="button"
           onClick={() => handleTabChange('grades')}
           className={`teacher-tab-btn ${activeTab === 'grades' ? 'active' : ''}`}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
         >
-          <Table size={15} />
+          <Table size={14} />
           <span>Sổ Điểm</span>
         </button>
 
@@ -1045,168 +1802,387 @@ export function TeacherPortal({
           type="button"
           onClick={() => handleTabChange('quiz')}
           className={`teacher-tab-btn ${activeTab === 'quiz' ? 'active' : ''}`}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
         >
-          <HelpCircle size={15} />
+          <HelpCircle size={14} />
           <span>Tạo Đề Moodle XML</span>
         </button>
       </div>
 
       {/* ==================================================================== */}
-      {/* TAB 1: TEACHER AI ASSISTANT CHAT                                     */}
+      {/* TAB 1: TEACHER AI ASSISTANT CHAT & STUDY TOOLS                       */}
       {/* ==================================================================== */}
       {activeTab === 'assistant' && (
-        <div className="teacher-assistant-chat-wrap">
-          {/* Chat Messages */}
-          <div className="messages">
-            {assistantChat.map((m, i) => (
-              <div className={`message ${m.role}`} key={i}>
-                {m.role === 'ai' && (
-                  <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Sparkles size={16} />
-                  </span>
-                )}
-                <div id={`teacher-chat-msg-${i}`} style={{ minWidth: 0, width: '100%' }}>
-                  <MarkdownRenderer content={m.text} />
-
-                  {/* External sources citation pills */}
-                  {m.sources && m.sources.length > 0 && (
-                    <div className="citations">
-                      {m.sources.map((s, idx) => {
-                        const isObj = typeof s === 'object' && s !== null;
-                        const rawName = isObj ? s.name : String(s);
-                        const url = isObj && s.url ? s.url : `https://www.google.com/search?q=${encodeURIComponent(rawName)}`;
-                        return (
-                          <a
-                            key={idx}
-                            className="citation-pill external-citation"
-                            href={url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                          >
-                            <Globe size={12} style={{ color: '#38bdf8' }} />
-                            <span className="citation-text">{rawName}</span>
-                            <ExternalLink size={10} style={{ opacity: 0.7 }} />
-                          </a>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Copy button for AI message */}
-                  {m.role === 'ai' && (
-                    <div className="message-toolbar">
-                      <button
-                        type="button"
-                        className={`copy-message-btn ${copiedMsgIdx === i ? 'copied' : ''}`}
-                        onClick={() => copyMessageText(m.text, i)}
-                        title="Sao chép nội dung câu trả lời"
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-                      >
-                        {copiedMsgIdx === i ? <Check size={13} /> : <Copy size={13} />}
-                        <span>{copiedMsgIdx === i ? 'Đã sao chép' : 'Sao chép'}</span>
-                      </button>
-                    </div>
-                  )}
+        <div className={`tutor-layout ${isSourcePanelCollapsed ? 'source-collapsed' : ''}`} style={{ flex: '1 1 0%', minHeight: 0, height: '100%' }}>
+          {/* Source panel */}
+          <aside className={`source-panel ${isSourcePanelCollapsed ? 'collapsed' : ''}`}>
+            <div className="source-panel-header">
+              <div className="panel-title">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                  <Folder size={15} style={{ color: '#a78bfa' }} />
+                  <strong>Nguồn tài liệu</strong>
                 </div>
-              </div>
-            ))}
-
-            {assistantLoading && (
-              <div className="message ai">
-                <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Sparkles size={16} />
-                </span>
-                <div className="typing">
-                  <i />
-                  <i />
-                  <i />
-                </div>
-              </div>
-            )}
-            <div ref={chatMessagesEndRef} />
-          </div>
-
-          {/* Chat Composer */}
-          <div className="chat-compose">
-            <textarea
-              value={assistantInput}
-              onChange={e => setAssistantInput(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void askAssistant();
-                }
-              }}
-              placeholder="Nhập yêu cầu: đề xuất học liệu, soạn bài tập, lập kế hoạch bài giảng hoặc tạo câu hỏi thi..."
-            />
-            <div className="chat-compose-footer">
-              <div className="chat-compose-chips" />
-
-              <div className="chat-compose-actions">
-                <button
-                  type="button"
-                  className="clear-chat-btn"
-                  onClick={() => {
-                    const curCourse = courses.find(c => String(c.id) === String(selectedCourseId) || c.code === String(selectedCourseId));
-                    setAssistantChat([
-                      {
-                        role: 'ai',
-                        text: `Trợ lý AI Giảng dạy môn **${curCourse?.name || 'môn học'}** đã sẵn sàng. Bạn có thể yêu cầu đề xuất tài liệu học tập, soạn bài tập, lập kế hoạch bài giảng hoặc phân tích kết quả sổ điểm.`,
-                      },
-                    ]);
-                  }}
-                  disabled={assistantChat.length <= 1 || assistantLoading}
-                  title="Xóa toàn bộ lịch sử trò chuyện"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-                >
-                  <Trash2 size={13} />
-                  <span>Xóa lịch sử</span>
-                </button>
-
-                {assistantLoading ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                  <span>{selectedSourceNames.length} đã chọn</span>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (assistantAbortRef.current) {
-                        assistantAbortRef.current.abort();
-                        assistantAbortRef.current = null;
-                      }
-                      setAssistantLoading(false);
-                    }}
-                    style={{
-                      background: 'linear-gradient(135deg, #ef4444, #dc2626)',
-                      color: '#fff',
-                      border: 'none',
-                      padding: '0.5rem 1.1rem',
-                      borderRadius: '10px',
-                      fontWeight: 600,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      cursor: 'pointer',
-                      boxShadow: '0 2px 10px rgba(239, 68, 68, 0.4)',
-                    }}
-                    title="Dừng phản hồi"
+                    className="collapse-source-btn"
+                    onClick={() => setIsSourcePanelCollapsed(true)}
+                    title="Thu gọn danh sách tài liệu môn học"
+                    aria-label="Thu gọn danh sách tài liệu môn học"
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   >
-                    <Square size={12} fill="currentColor" />
-                    <span>Dừng</span>
+                    <ChevronLeft size={14} />
                   </button>
-                ) : (
+                </div>
+              </div>
+
+              <label className="source-search">
+                <Search size={14} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                <input
+                  value={sourceQuery}
+                  onChange={e => setSourceQuery(e.target.value)}
+                  placeholder="Tìm tài liệu môn học..."
+                />
+              </label>
+            </div>
+
+            <div className="source-list-scroll">
+              {visibleSources.length === 0 ? (
+                <div className="empty-state" style={{ padding: '1rem', fontSize: '13px' }}>
+                  Chưa có tài liệu nào trong khóa học này. Hãy nhấn &quot;Thêm nguồn tài liệu&quot; bên dưới hoặc đồng bộ từ Moodle.
+                </div>
+              ) : (
+                visibleSources.map(({ item, i }) => {
+                  const badge = getSourceBadge(item.type || '', item.name);
+                  return (
+                    <label className="source-item" key={`${item.name}-${i}`}>
+                      <input
+                        type="checkbox"
+                        checked={checkedSources[i] ?? true}
+                        onChange={() =>
+                          setCheckedSources(v => v.map((x, n) => (n === i ? !x : x)))
+                        }
+                      />
+                      <span className={`file-badge ${badge.className}`}>{badge.label}</span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {item.url ? (
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            title="Mở tài liệu gốc"
+                          >
+                            <span>{item.name}</span>
+                            <ExternalLink size={12} style={{ opacity: 0.7 }} />
+                          </a>
+                        ) : (
+                          item.name
+                        )}
+                        <small>
+                          {item.sizeOrPages ? item.sizeOrPages : item.type === 'LINK' ? 'Liên kết Web' : item.type}
+                        </small>
+                      </span>
+                    </label>
+                  );
+                })
+              )}
+
+              <button className="add-source" onClick={() => setShowUploadModal(true)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                <Plus size={15} />
+                Thêm nguồn tài liệu (PDF, Word, Web)
+              </button>
+            </div>
+
+            <div className="source-panel-footer">
+              <div
+                className={`grounded interactive-switch ${allowExternalSource ? 'external-on' : ''}`}
+                onClick={() => {
+                  setAllowExternalSource(prev => {
+                    const next = !prev;
+                    notify(
+                      next
+                        ? 'Đã bật: Cho phép liên hệ kiến thức thực tiễn ngoài giáo trình'
+                        : 'Đã bật: Chế độ bám sát nghiêm ngặt tài liệu môn học'
+                    );
+                    return next;
+                  });
+                }}
+                style={{ cursor: 'pointer' }}
+                title="Nhấp để bật/tắt quyền dùng nguồn kiến thức mở rộng bên ngoài"
+              >
+                <div className="grounded-header">
+                  <div className="grounded-header-left">
+                    {allowExternalSource ? <Globe size={15} style={{ color: '#38bdf8' }} /> : <Lock size={15} style={{ color: '#94a3b8' }} />}
+                    <strong className="grounded-title">{allowExternalSource ? 'Nguồn mở rộng' : 'Bám sát tài liệu'}</strong>
+                  </div>
+                  <span className={`unified-status-chip ${allowExternalSource ? 'on' : 'off'}`}>
+                    {allowExternalSource ? 'BẬT' : 'TẮT'}
+                  </span>
+                </div>
+                <p className="grounded-subtitle">
+                  {allowExternalSource
+                    ? 'AI kết hợp giáo trình với kiến thức thực tiễn và công nghệ hiện đại.'
+                    : 'AI phân tích nghiêm ngặt chỉ dựa trên các tài liệu đã chọn.'}
+                </p>
+              </div>
+            </div>
+          </aside>
+
+          {/* Chat / Artifact panel */}
+          <section className="chat-panel">
+            <div className="tool-tabs">
+              <div className="tool-tabs-left">
+                {isSourcePanelCollapsed && (
                   <button
-                    className="chat-send-btn"
-                    onClick={() => void askAssistant()}
-                    disabled={!assistantInput.trim()}
+                    type="button"
+                    className="expand-source-pill"
+                    onClick={() => setIsSourcePanelCollapsed(false)}
+                    title="Mở danh sách tài liệu môn học"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                   >
-                    <span>Gửi</span>
-                    <Send size={14} />
+                    <Folder size={14} />
+                    <span></span>
+                    <span className="source-count-badge">{selectedSourceNames.length}</span>
                   </button>
+                )}
+                {[
+                  { id: 'Chat', label: 'Chat', icon: <MessageSquare size={14} /> },
+                  { id: 'Tóm tắt', label: 'Tóm tắt', icon: <FileText size={14} /> },
+                  { id: 'Mindmap', label: 'Mindmap', icon: <GitFork size={14} /> },
+                  { id: 'Flashcard', label: 'Flashcard', icon: <Layers size={14} /> },
+                  { id: 'Slide', label: 'Slide', icon: <Layout size={14} /> },
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    className={tool === tab.id ? 'selected' : ''}
+                    onClick={() => openTool(tab.id)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    {tab.icon}
+                    <span>{tab.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="tool-tabs-actions">
+                {selectedCourseId && (
+                  <a
+                    href={`${moodleUrl.replace(/\/$/, '')}/course/view.php?id=${selectedCourseId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="lms-redirect-btn"
+                    title={`Mở trực tiếp khóa học ${curCourseTitle} trên hệ thống Moodle LMS`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <GraduationCap size={15} />
+                    <span>Mở LMS</span>
+                    <ExternalLink size={12} style={{ opacity: 0.8 }} />
+                  </a>
                 )}
               </div>
             </div>
-          </div>
+
+            {tool === 'Chat' ? (
+              <>
+                {/* Chat Messages */}
+                <div className="messages">
+                  {assistantChat.map((m, i) => (
+                    <div className={`message ${m.role}`} key={i}>
+                      {m.role === 'ai' && (
+                        <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <Sparkles size={16} />
+                        </span>
+                      )}
+                      <div id={`teacher-chat-msg-${i}`} style={{ minWidth: 0, width: '100%' }}>
+                        <MarkdownRenderer content={m.text} />
+
+                        {/* External sources citation pills */}
+                        {m.sources && m.sources.length > 0 && (
+                          <div className="citations">
+                            {m.sources.map((s, idx) => {
+                              const isObj = typeof s === 'object' && s !== null;
+                              const rawName = isObj ? s.name : String(s);
+                              const cleanName = rawName.replace(/^(▤|➕|\+\s*|\[Mở rộng\])/, '').trim();
+                              const searchTarget = cleanName.replace(/^(Kiểm chứng|Nguồn mở rộng):\s*/i, '');
+                              const url = isObj && s.url ? s.url : `https://www.google.com/search?q=${encodeURIComponent(searchTarget)}`;
+                              return (
+                                <a
+                                  key={idx}
+                                  className="citation-pill external-citation"
+                                  href={url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                >
+                                  <Globe size={12} style={{ color: '#38bdf8' }} />
+                                  <span className="citation-text">{cleanName}</span>
+                                  <ExternalLink size={10} style={{ opacity: 0.7 }} />
+                                </a>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Toolbar for AI message */}
+                        {m.role === 'ai' && (
+                          <div className="message-toolbar" style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className={`copy-message-btn ${copiedMsgIdx === i ? 'copied' : ''}`}
+                              onClick={() => copyMessageText(m.text, i)}
+                              title="Sao chép câu trả lời (hỗ trợ dán vào Word hoặc Markdown)"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                            >
+                              {copiedMsgIdx === i ? <Check size={13} /> : <Copy size={13} />}
+                              <span>{copiedMsgIdx === i ? 'Đã sao chép' : 'Sao chép'}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              className="copy-message-btn"
+                              onClick={() => transferToQuizTab(m.text)}
+                              title="Chuyển văn bản câu hỏi này sang trình tạo đề thi Moodle XML"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                background: 'rgba(124, 109, 242, 0.15)',
+                                color: '#cfc8ff',
+                                borderColor: 'rgba(124, 109, 242, 0.35)',
+                              }}
+                            >
+                              <HelpCircle size={13} style={{ color: '#a594fd' }} />
+                              <span>Chuyển sang Tạo Đề XML</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                  {assistantLoading && (
+                    <div className="message ai">
+                      <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Sparkles size={16} />
+                      </span>
+                      <div className="typing">
+                        <i />
+                        <i />
+                        <i />
+                      </div>
+                    </div>
+                  )}
+                  <div ref={chatMessagesEndRef} />
+                </div>
+
+                {/* Chat Composer */}
+                <div className="chat-compose">
+                  <textarea
+                    value={assistantInput}
+                    onChange={e => setAssistantInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        void askAssistant();
+                      }
+                    }}
+                    placeholder={`Nhập yêu cầu: soạn câu hỏi thi, lập giáo án, tóm tắt kiến thức hoặc phân tích môn ${curCourseTitle}...`}
+                  />
+                  <div className="chat-compose-footer">
+                    <div className="chat-compose-chips">
+                      {/* Answer Style Selector (Concise vs Detailed) */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAnswerStyle(prev => {
+                            const next = prev === 'concise' ? 'detailed' : 'concise';
+                            notify(
+                              next === 'detailed'
+                                ? 'Chế độ phân tích: Chi tiết & Chuyên sâu'
+                                : 'Chế độ phân tích: Nhanh & Trọng tâm'
+                            );
+                            return next;
+                          });
+                        }}
+                        className={`mode-indicator-chip ${answerStyle === 'detailed' ? 'style-detailed' : ''}`}
+                        title="Chuyển đổi giữa phân tích trọng tâm và phân tích chuyên sâu"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                      >
+                        {answerStyle === 'concise' ? <Zap size={13} /> : <BookOpen size={13} />}
+                        <span>{answerStyle === 'concise' ? 'Nhanh / Trọng tâm' : 'Chi tiết / Chuyên sâu'}</span>
+                      </button>
+                    </div>
+
+                    <div className="chat-compose-actions">
+                      <button
+                        type="button"
+                        className="clear-chat-btn"
+                        onClick={handleClearChat}
+                        disabled={assistantChat.length <= 1 || assistantLoading}
+                        title="Xóa toàn bộ lịch sử trò chuyện"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                      >
+                        <Trash2 size={13} />
+                        <span>Xóa lịch sử</span>
+                      </button>
+
+                      {assistantLoading ? (
+                        <button
+                          type="button"
+                          onClick={stopGeneration}
+                          style={{
+                            background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                            color: '#fff',
+                            border: 'none',
+                            padding: '0.5rem 1.1rem',
+                            borderRadius: '10px',
+                            fontWeight: 600,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            cursor: 'pointer',
+                            boxShadow: '0 2px 10px rgba(239, 68, 68, 0.4)',
+                            transition: 'all 0.2s ease',
+                          }}
+                          title="Dừng phản hồi"
+                        >
+                          <Square size={12} fill="currentColor" />
+                          <span>Dừng</span>
+                        </button>
+                      ) : (
+                        <button
+                          className="chat-send-btn"
+                          onClick={() => void askAssistant()}
+                          disabled={!assistantInput.trim()}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                        >
+                          <span>Gửi</span>
+                          <Send size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="tool-workspace-container">
+                <StudyArtifact
+                  type={tool}
+                  artifact={artifactsMap[tool] ?? null}
+                  courseTitle={curCourseTitle}
+                  loading={artifactLoading}
+                  selectedSourcesCount={selectedSourceNames.length}
+                  onGenerate={(lvl, top, ext) => void generateToolArtifact(tool, lvl, top, ext)}
+                  onReset={() => resetToolArtifact(tool)}
+                  copyText={copyText}
+                  notify={notify}
+                />
+              </div>
+            )}
+          </section>
         </div>
       )}
 
@@ -1719,7 +2695,7 @@ export function TeacherPortal({
               </div>
             )}
 
-            {/* Bottom Bar: Action Button to Open Smart Import Modal */}
+            {/* Bottom Bar: Summary information */}
             <div
               style={{
                 padding: '0.85rem 1.25rem',
@@ -1734,35 +2710,6 @@ export function TeacherPortal({
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#9894ad', fontSize: '0.82rem' }}>
                 <span>Hiển thị tất cả {activeStudents.length} sinh viên</span>
-              </div>
-
-              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', width: isMobile ? '100%' : 'auto' }}>
-                <button
-                  type="button"
-                  onClick={() => setShowImportModal(true)}
-                  style={{
-                    padding: '0.65rem 1.4rem',
-                    borderRadius: '8px',
-                    border: 'none',
-                    background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
-                    color: '#fff',
-                    fontWeight: 600,
-                    fontSize: '0.9rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0.5rem',
-                    boxShadow: '0 4px 14px rgba(124, 109, 242, 0.4)',
-                    transition: 'all 0.2s ease',
-                    width: isMobile ? '100%' : 'auto',
-                    minHeight: '44px',
-                  }}
-                  title="Mở bảng nhập điểm tự động từ file, hình ảnh hoặc văn bản"
-                >
-                  <UploadCloud size={16} />
-                  <span>Nhập Điểm Tự Động (Excel / Ảnh / Dán)</span>
-                </button>
               </div>
             </div>
           </div>
@@ -3166,6 +4113,478 @@ export function TeacherPortal({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* RESOURCE UPLOAD MODAL (TEACHER & COURSE SOURCES)                     */}
+      {/* ==================================================================== */}
+      {showUploadModal && (
+        <div
+          className="teacher-modal-backdrop"
+          onClick={() => {
+            if (!uploadLoading) setShowUploadModal(false);
+          }}
+        >
+          <div
+            className="teacher-modal-panel"
+            style={{ width: 'min(100%, 640px)', padding: 0 }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div
+              style={{
+                padding: '1.25rem 1.5rem',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                background: 'rgba(20, 18, 34, 0.95)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '10px',
+                    background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fff',
+                    flexShrink: 0,
+                  }}
+                >
+                  <UploadCloud size={18} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#f3f2f8', fontWeight: 700 }}>
+                    Thêm Nguồn Tài Liệu Giảng Dạy
+                  </h3>
+                  <p style={{ margin: '0.15rem 0 0', fontSize: '0.8rem', color: '#9894ad' }}>
+                    Nạp tài liệu môn học để Trợ lý AI và các công cụ hỗ trợ phân tích chuyên sâu
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!uploadLoading) setShowUploadModal(false);
+                }}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#9894ad',
+                  fontSize: '1.25rem',
+                  cursor: 'pointer',
+                  padding: '0.3rem 0.5rem',
+                  borderRadius: '6px',
+                }}
+                aria-label="Đóng"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <form onSubmit={handleUploadSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+              <div style={{ padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+                {/* 3 Mode Tabs */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    background: '#141220',
+                    padding: '4px',
+                    borderRadius: '10px',
+                    border: '1px solid #26233a',
+                    gap: '4px',
+                  }}
+                >
+                  {[
+                    { id: 'file', label: 'Tải tệp lên', icon: FileText, desc: 'PDF, Word, PPTX, TXT' },
+                    { id: 'url', label: 'Liên kết Web', icon: Globe, desc: 'URL, Bài viết, Tài liệu' },
+                    { id: 'text', label: 'Ghi chú nhanh', icon: BookOpen, desc: 'Dán trực tiếp văn bản' },
+                  ].map(tab => {
+                    const isSelected = uploadTab === tab.id;
+                    const Icon = tab.icon;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setUploadTab(tab.id as 'file' | 'url' | 'text')}
+                        style={{
+                          padding: '0.6rem 0.5rem',
+                          borderRadius: '8px',
+                          border: isSelected ? '1px solid rgba(124, 109, 242, 0.5)' : '1px solid transparent',
+                          background: isSelected ? 'rgba(124, 109, 242, 0.2)' : 'transparent',
+                          color: isSelected ? '#ffffff' : '#9894ad',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px',
+                          fontSize: '0.85rem',
+                          fontWeight: isSelected ? 600 : 500,
+                          transition: 'all 0.2s ease',
+                        }}
+                      >
+                        <Icon size={15} style={{ color: isSelected ? '#a594fd' : '#71717a' }} />
+                        <span>{tab.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Tab 1: File Upload Dropzone */}
+                {uploadTab === 'file' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    <div
+                      onDragOver={e => {
+                        e.preventDefault();
+                        setUploadDragActive(true);
+                      }}
+                      onDragLeave={() => setUploadDragActive(false)}
+                      onDrop={e => {
+                        e.preventDefault();
+                        setUploadDragActive(false);
+                        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                          setUploadFile(e.dataTransfer.files[0]);
+                          if (!uploadFileTitle) {
+                            setUploadFileTitle(e.dataTransfer.files[0].name.replace(/\.[^/.]+$/, ''));
+                          }
+                        }
+                      }}
+                      onClick={() => uploadFileInputRef.current?.click()}
+                      style={{
+                        padding: '1.75rem 1.25rem',
+                        border: uploadDragActive ? '2px dashed #7c6df2' : '2px dashed rgba(124, 109, 242, 0.4)',
+                        borderRadius: '12px',
+                        background: uploadDragActive ? 'rgba(124, 109, 242, 0.15)' : 'rgba(20, 18, 34, 0.6)',
+                        textAlign: 'center',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.4rem',
+                      }}
+                    >
+                      <input
+                        ref={uploadFileInputRef}
+                        type="file"
+                        accept=".pdf,.docx,.doc,.pptx,.ppt,.txt"
+                        style={{ display: 'none' }}
+                        onChange={e => {
+                          if (e.target.files && e.target.files[0]) {
+                            const f = e.target.files[0];
+                            setUploadFile(f);
+                            if (!uploadFileTitle) {
+                              setUploadFileTitle(f.name.replace(/\.[^/.]+$/, ''));
+                            }
+                          }
+                        }}
+                      />
+
+                      {uploadFile ? (
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.75rem',
+                            width: '100%',
+                            maxWidth: '380px',
+                            padding: '0.65rem 0.85rem',
+                            background: '#141220',
+                            borderRadius: '10px',
+                            border: '1px solid rgba(124, 109, 242, 0.35)',
+                          }}
+                          onClick={e => e.stopPropagation()}
+                        >
+                          <div
+                            style={{
+                              width: '32px',
+                              height: '32px',
+                              borderRadius: '8px',
+                              background: 'rgba(124, 109, 242, 0.2)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: '#a594fd',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <FileText size={18} />
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                            <div
+                              style={{
+                                fontSize: '0.88rem',
+                                fontWeight: 600,
+                                color: '#f3f2f8',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {uploadFile.name}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: '#9894ad' }}>
+                              {(uploadFile.size / (1024 * 1024)).toFixed(2)} MB
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setUploadFile(null);
+                              setUploadFileTitle('');
+                            }}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#ef4444',
+                              cursor: 'pointer',
+                              padding: '4px',
+                              fontSize: '1rem',
+                            }}
+                            title="Xóa tệp đã chọn"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <div
+                            style={{
+                              width: '44px',
+                              height: '44px',
+                              borderRadius: '50%',
+                              background: 'rgba(124, 109, 242, 0.15)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: '#a594fd',
+                              marginBottom: '0.2rem',
+                            }}
+                          >
+                            <UploadCloud size={24} />
+                          </div>
+                          <strong style={{ fontSize: '0.92rem', color: '#f3f2f8' }}>
+                            Kéo thả tài liệu vào đây hoặc nhấp để chọn tệp
+                          </strong>
+                          <p style={{ margin: 0, fontSize: '0.78rem', color: '#9894ad' }}>
+                            Hỗ trợ các định dạng: PDF, Word (.docx, .doc), PowerPoint (.pptx, .ppt), TXT
+                          </p>
+                        </>
+                      )}
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                        Tên hiển thị tài liệu (Tùy chọn):
+                      </label>
+                      <input
+                        type="text"
+                        value={uploadFileTitle}
+                        onChange={e => setUploadFileTitle(e.target.value)}
+                        placeholder="VD: Đề cương môn học - Chương 1..."
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem 0.85rem',
+                          borderRadius: '8px',
+                          background: '#141220',
+                          color: '#f3f2f8',
+                          border: '1px solid #26233a',
+                          fontSize: '16px',
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 2: Web URL */}
+                {uploadTab === 'url' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                        Địa chỉ liên kết Web (URL): <span style={{ color: '#ef4444' }}>*</span>
+                      </label>
+                      <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                        <Globe size={16} style={{ position: 'absolute', left: '12px', color: '#9894ad' }} />
+                        <input
+                          type="url"
+                          value={uploadUrl}
+                          onChange={e => setUploadUrl(e.target.value)}
+                          placeholder="https://example.com/tai-lieu-giang-day"
+                          required
+                          style={{
+                            width: '100%',
+                            padding: '0.65rem 0.85rem 0.65rem 36px',
+                            borderRadius: '8px',
+                            background: '#141220',
+                            color: '#f3f2f8',
+                            border: '1px solid #26233a',
+                            fontSize: '16px',
+                            outline: 'none',
+                            boxSizing: 'border-box',
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                        Tiêu đề liên kết / Tên tài liệu:
+                      </label>
+                      <input
+                        type="text"
+                        value={uploadUrlTitle}
+                        onChange={e => setUploadUrlTitle(e.target.value)}
+                        placeholder="VD: Tài liệu tham khảo môn học..."
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem 0.85rem',
+                          borderRadius: '8px',
+                          background: '#141220',
+                          color: '#f3f2f8',
+                          border: '1px solid #26233a',
+                          fontSize: '16px',
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 3: Text Note */}
+                {uploadTab === 'text' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                        Tiêu đề ghi chú:
+                      </label>
+                      <input
+                        type="text"
+                        value={uploadTextTitle}
+                        onChange={e => setUploadTextTitle(e.target.value)}
+                        placeholder="VD: Ghi chú đề bài thi giữa kỳ..."
+                        style={{
+                          width: '100%',
+                          padding: '0.65rem 0.85rem',
+                          borderRadius: '8px',
+                          background: '#141220',
+                          color: '#f3f2f8',
+                          border: '1px solid #26233a',
+                          fontSize: '16px',
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                        Nội dung bài học / Ghi chép: <span style={{ color: '#ef4444' }}>*</span>
+                      </label>
+                      <textarea
+                        rows={6}
+                        value={uploadTextContent}
+                        onChange={e => setUploadTextContent(e.target.value)}
+                        placeholder="Dán nội dung giáo án, tài liệu, ghi chú vào đây..."
+                        required
+                        style={{
+                          width: '100%',
+                          padding: '0.75rem',
+                          borderRadius: '8px',
+                          background: '#141220',
+                          color: '#f3f2f8',
+                          border: '1px solid #26233a',
+                          fontSize: '16px',
+                          outline: 'none',
+                          resize: 'vertical',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div
+                style={{
+                  padding: '1rem 1.5rem',
+                  borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                  gap: '0.75rem',
+                  background: 'rgba(0, 0, 0, 0.25)',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setShowUploadModal(false)}
+                  disabled={uploadLoading}
+                  style={{
+                    padding: '0.55rem 1.15rem',
+                    borderRadius: '8px',
+                    border: '1px solid #26233a',
+                    background: 'transparent',
+                    color: '#9894ad',
+                    fontWeight: 600,
+                    fontSize: '0.88rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={uploadLoading}
+                  style={{
+                    padding: '0.55rem 1.35rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
+                    color: '#ffffff',
+                    fontWeight: 700,
+                    fontSize: '0.88rem',
+                    cursor: uploadLoading ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 4px 14px rgba(124, 109, 242, 0.4)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    opacity: uploadLoading ? 0.7 : 1,
+                  }}
+                >
+                  {uploadLoading ? (
+                    <>
+                      <Sparkles size={14} />
+                      <span>Đang xử lý tài liệu...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check size={14} />
+                      <span>Thêm vào tài liệu môn học</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className="toast">
+          {toast}
         </div>
       )}
     </div>

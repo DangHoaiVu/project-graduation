@@ -55,6 +55,8 @@ export async function POST(request: Request) {
       students,
       gradeColumns = [],
       gradebookScores = {},
+      allowExternalSource = false,
+      answerStyle = 'concise',
     } = (await request.json()) as {
       question?: string;
       course?: string;
@@ -66,6 +68,8 @@ export async function POST(request: Request) {
       students?: StudentItem[] | StudentSummary;
       gradeColumns?: GradeColumnSummary[];
       gradebookScores?: Record<string, Record<string, number | string>>;
+      allowExternalSource?: boolean;
+      answerStyle?: 'concise' | 'detailed';
     };
 
     if (!question.trim()) {
@@ -200,15 +204,16 @@ QUY TẮC ĐẶC BIỆT KHI PHÂN TÍCH BẢNG ĐIỂM (BẮT BUỘC):
 
 QUY TẮC PHẠM VI:
 - Tập trung vào môn "${subjectName}" và các chủ đề liên quan trực tiếp.
-- Khi soạn câu hỏi kiểm tra, BẮT BUỘC bám sát nội dung tài liệu môn học được cung cấp bên dưới (nếu có).
+- ${allowExternalSource ? 'CHẾ ĐỘ MỞ RỘNG (EXTERNAL SOURCES ALLOWED): Ưu tiên tài liệu môn học, đồng thời được phép liên hệ thực tiễn ngành nghề, các giải pháp công nghệ hiện đại, tài liệu học thuật quốc tế và ví dụ thực tế phong phú.' : 'CHẾ ĐỘ BÁM SÁT NGHIÊM NGẶT (STRICT GROUNDING): Bám sát chặt chẽ nội dung tài liệu môn học và bảng điểm được cung cấp dưới đây, không suy diễn kiến thức ngoài giáo trình.'}
 - Sử dụng ngôn ngữ chuyên nghiệp, chuẩn sư phạm đại học.
 
 QUY TẮC PHONG CÁCH & ĐỊNH DẠNG SƯ PHẠM (BẮT BUỘC):
 1. ĐI THẲNG VÀO NỘI DUNG YÊU CẦU: Không dùng lời chào hỏi xã giao hay kết thúc sáo rỗng. Bắt đầu trực tiếp bằng nội dung tư vấn, phân tích hoặc sản phẩm bài giảng được yêu cầu.
-2. VĂN PHONG HỌC THUẬT CHUẨN MỰC: Sử dụng ngôn ngữ chuẩn sư phạm đại học, trang trọng, khúc chiết, chuẩn xác. Tuyệt đối không dùng phong cách suồng sã hay mỉa mai.
-3. TOÁN HỌC: Sử dụng LaTeX chuẩn $công_thức$ (ví dụ: $O(n \\log n)$, $\\sum_{i=1}^{n}$).
-4. BẢNG BIỂU: Dùng thẻ <br/> xuống dòng trong ô bảng Markdown. Không đặt code block bên trong ô bảng.
-5. Khi soạn câu hỏi trắc nghiệm, trình bày rõ đáp án đúng và lời giải thích.`;
+2. ${answerStyle === 'detailed' ? 'MỨC ĐỘ CHI TIẾT: Phân tích chuyên sâu, toàn diện, đa chiều, giải thích cặn kẽ nguyên lý, dẫn chứng đầy đủ và hướng dẫn thực hiện từng bước.' : 'MỨC ĐỘ CHI TIẾT: Phân tích nhanh, súc tích, đi thẳng vào các ý chính và giải pháp trọng tâm.'}
+3. VĂN PHONG HỌC THUẬT CHUẨN MỰC: Sử dụng ngôn ngữ chuẩn sư phạm đại học, trang trọng, khúc chiết, chuẩn xác. Tuyệt đối không dùng phong cách suồng sã hay mỉa mai.
+4. TOÁN HỌC: Sử dụng LaTeX chuẩn $công_thức$ (ví dụ: $O(n \\log n)$, $\\sum_{i=1}^{n}$).
+5. BẢNG BIỂU: Dùng thẻ <br/> xuống dòng trong ô bảng Markdown. Không đặt code block bên trong ô bảng.
+6. Khi soạn câu hỏi trắc nghiệm, trình bày rõ đáp án đúng và lời giải thích.`;
 
     let contextSection = '';
     if (documentContext.trim()) {

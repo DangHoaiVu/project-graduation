@@ -21,6 +21,7 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Folder,
   BarChart3,
   GraduationCap,
@@ -39,6 +40,7 @@ import {
   Calendar,
   Flame,
   UploadCloud,
+  Layout,
 } from 'lucide-react';
 import {
   baseCourses,
@@ -61,6 +63,8 @@ import type {
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
 import { InteractiveMindmap } from '@/app/components/InteractiveMindmap';
 import { QuizComponent } from '@/app/components/QuizComponent';
+import { SlidePresentation } from '@/app/components/SlidePresentation';
+import type { SlideDeckData } from '@/lib/pptx-export';
 import { TeacherPortal } from '@/app/components/teacher/TeacherPortal';
 import { exportSummaryToDocx, copyRichHtmlForWord, exportChatMessageToDocx } from '@/lib/export-utils';
 
@@ -181,8 +185,25 @@ function StudyArtifact({
   const [topicInput, setTopicInput] = useState('');
   const [allowExternal, setAllowExternal] = useState<boolean>(false);
 
-  const toolIcon = type === 'Tóm tắt' ? <FileText size={20} /> : type === 'Mindmap' ? <GitFork size={20} /> : <Layers size={20} />;
-  const toolName = type === 'Tóm tắt' ? 'Bản tóm tắt học thuật' : type === 'Mindmap' ? 'Sơ đồ tư duy (Mindmap)' : 'Bộ thẻ ghi nhớ (Flashcards)';
+  const toolIcon =
+    type === 'Tóm tắt' ? (
+      <FileText size={20} />
+    ) : type === 'Mindmap' ? (
+      <GitFork size={20} />
+    ) : type === 'Slide' ? (
+      <Layout size={20} />
+    ) : (
+      <Layers size={20} />
+    );
+
+  const toolName =
+    type === 'Tóm tắt'
+      ? 'Bản tóm tắt học thuật'
+      : type === 'Mindmap'
+      ? 'Sơ đồ tư duy (Mindmap)'
+      : type === 'Slide'
+      ? 'Slide bài giảng (PowerPoint)'
+      : 'Bộ thẻ ghi nhớ (Flashcards)';
 
   if (loading) {
     return (
@@ -303,6 +324,19 @@ function StudyArtifact({
 
   const levelLabel =
     artifact.level === 'simple' ? 'Cơ bản' : artifact.level === 'complex' ? 'Chuyên sâu' : 'Tiêu chuẩn';
+
+  if (type === 'Slide') {
+    return (
+      <SlidePresentation
+        initialDeck={artifact.data as SlideDeckData}
+        courseTitle={courseTitle}
+        levelLabel={levelLabel}
+        topic={artifact.topic}
+        onReconfigure={onReset}
+        notify={notify}
+      />
+    );
+  }
 
   if (type === 'Mindmap') {
     const map = artifact.data as { root: string; branches: Array<{ title: string; items: string[] }> };
@@ -997,7 +1031,14 @@ function CourseDetailContent() {
     setArtifactLoading(true);
     const selectedSources = sources.filter((_, i) => checked[i]);
     const selectedSourceNames = selectedSources.map(s => s.name);
-    const apiType = type === 'Tóm tắt' ? 'summary' : type === 'Mindmap' ? 'mindmap' : 'flashcards';
+    const apiType =
+      type === 'Tóm tắt'
+        ? 'summary'
+        : type === 'Mindmap'
+        ? 'mindmap'
+        : type === 'Slide'
+        ? 'slides'
+        : 'flashcards';
     const effectiveAllowExternal = allowExternal !== undefined ? allowExternal : allowExternalSource;
 
     try {
@@ -1333,18 +1374,21 @@ function CourseDetailContent() {
         {isTeacherCourse ? (
           <div className={`workspace-page course-workspace teacher-workspace fade-in ${teacherTab === 'assistant' ? 'assistant-tab-active' : ''}`}>
             <div
-              className="workspace-title course-workspace-title"
-              style={{ marginBottom: teacherTab === 'assistant' ? '0.75rem' : '1.5rem' }}
+              className={`workspace-title course-workspace-title ${teacherTab === 'assistant' ? 'compact-assistant-header' : ''}`}
+              style={{
+                marginBottom: teacherTab === 'assistant' ? '4px' : '1.5rem',
+                paddingBottom: teacherTab === 'assistant' ? '0px' : '4px',
+              }}
             >
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                  <span className="eyebrow" style={{ margin: 0 }}>BÀN LÀM VIỆC GIẢNG VIÊN</span>
+              {teacherTab === 'assistant' ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span className="eyebrow" style={{ margin: 0, fontSize: '10px' }}>BÀN LÀM VIỆC GIẢNG VIÊN</span>
                   <span
                     style={{
-                      fontSize: '11px',
+                      fontSize: '10px',
                       fontWeight: 700,
-                      padding: '2px 8px',
-                      borderRadius: '12px',
+                      padding: '1px 6px',
+                      borderRadius: '10px',
                       background: 'rgba(124, 109, 242, 0.35)',
                       color: '#e0d8ff',
                       border: '1px solid rgba(124, 109, 242, 0.5)',
@@ -1353,63 +1397,161 @@ function CourseDetailContent() {
                       gap: '4px',
                     }}
                   >
-                    <GraduationCap size={12} />
+                    <GraduationCap size={11} />
                     <span>Vai trò: Giảng viên</span>
                   </span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                  <h1 style={{ margin: 0 }}>{activeCourse.name}</h1>
-                  {activeCourse.id && (
-                    <a
-                      href={`${(moodle?.moodleUrl || 'http://moodle.test').replace(/\/$/, '')}/course/view.php?id=${activeCourse.id}`}
-                      target="_blank"
-                      rel="noreferrer"
+                  <span style={{ color: 'rgba(255, 255, 255, 0.25)' }}>|</span>
+                  <h1 style={{ margin: 0, fontSize: '1.05rem', lineHeight: 1.2, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    {activeCourse.name}
+                  </h1>
+                  {allCourses.length > 0 && (
+                    <div
                       style={{
+                        position: 'relative',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                      }}
+                      title="Chuyển nhanh khóa học"
+                    >
+                      <button
+                        type="button"
+                        style={{
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '4px',
+                          background: 'rgba(124, 109, 242, 0.15)',
+                          border: '1px solid rgba(124, 109, 242, 0.35)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: '#cfc8ff',
+                          cursor: 'pointer',
+                          padding: 0,
+                          transition: 'all 0.2s ease',
+                        }}
+                        aria-label="Chuyển nhanh khóa học"
+                      >
+                        <ChevronDown size={13} />
+                      </button>
+                      <select
+                        value={activeCourse.code}
+                        onChange={e => {
+                          const targetCode = e.target.value;
+                          const target = allCourses.find(c => c.code.toLowerCase() === targetCode.toLowerCase());
+                          if (target) {
+                            router.replace(
+                              `/course?code=${encodeURIComponent(target.code)}&name=${encodeURIComponent(target.name)}&id=${target.id ?? ''}`
+                            );
+                          }
+                        }}
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          opacity: 0,
+                          width: '100%',
+                          height: '100%',
+                          cursor: 'pointer',
+                        }}
+                        title="Chuyển nhanh khóa học"
+                      >
+                        {allCourses.map(c => (
+                          <option key={c.code} value={c.code}>
+                            {c.name} ({c.code})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <span style={{ fontSize: '11px', color: '#9894ad' }}>· Mã môn: {activeCourse.code || 'LMS'}</span>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                    <span className="eyebrow" style={{ margin: 0 }}>BÀN LÀM VIỆC GIẢNG VIÊN</span>
+                    <span
+                      style={{
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        padding: '1px 6px',
+                        borderRadius: '10px',
+                        background: 'rgba(124, 109, 242, 0.35)',
+                        color: '#e0d8ff',
+                        border: '1px solid rgba(124, 109, 242, 0.5)',
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: '4px',
-                        padding: '3px 10px',
-                        borderRadius: '20px',
-                        background: 'rgba(124, 109, 242, 0.15)',
-                        border: '1px solid rgba(124, 109, 242, 0.35)',
-                        color: '#cfc8ff',
-                        fontSize: '0.8rem',
-                        fontWeight: 600,
-                        textDecoration: 'none',
-                        transition: 'all 0.15s ease',
                       }}
-                      title="Mở khóa học này trực tiếp trên LMS"
                     >
-                      <span>Xem trên Moodle</span>
-                      <ExternalLink size={10} />
-                    </a>
-                  )}
+                      <GraduationCap size={11} />
+                      <span>Vai trò: Giảng viên</span>
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <h1 style={{ margin: 0 }}>{activeCourse.name}</h1>
+                    {allCourses.length > 0 && (
+                      <div
+                        style={{
+                          position: 'relative',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          cursor: 'pointer',
+                        }}
+                        title="Chuyển nhanh khóa học"
+                      >
+                        <button
+                          type="button"
+                          style={{
+                            width: '24px',
+                            height: '24px',
+                            borderRadius: '6px',
+                            background: 'rgba(124, 109, 242, 0.15)',
+                            border: '1px solid rgba(124, 109, 242, 0.35)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: '#cfc8ff',
+                            cursor: 'pointer',
+                            padding: 0,
+                            transition: 'all 0.2s ease',
+                          }}
+                          aria-label="Chuyển nhanh khóa học"
+                        >
+                          <ChevronDown size={14} />
+                        </button>
+                        <select
+                          value={activeCourse.code}
+                          onChange={e => {
+                            const targetCode = e.target.value;
+                            const target = allCourses.find(c => c.code.toLowerCase() === targetCode.toLowerCase());
+                            if (target) {
+                              router.replace(
+                                `/course?code=${encodeURIComponent(target.code)}&name=${encodeURIComponent(target.name)}&id=${target.id ?? ''}`
+                              );
+                            }
+                          }}
+                          style={{
+                            position: 'absolute',
+                            inset: 0,
+                            opacity: 0,
+                            width: '100%',
+                            height: '100%',
+                            cursor: 'pointer',
+                          }}
+                          title="Chuyển nhanh khóa học"
+                        >
+                          {allCourses.map(c => (
+                            <option key={c.code} value={c.code}>
+                              {c.name} ({c.code})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                  <p>Mã môn: {activeCourse.code || 'LMS'}</p>
                 </div>
-                <p>Mã môn: {activeCourse.code || 'LMS'}</p>
-              </div>
-
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                {allCourses.length > 0 && (
-                  <select
-                    value={activeCourse.code}
-                    onChange={e => {
-                      const targetCode = e.target.value;
-                      const target = allCourses.find(c => c.code.toLowerCase() === targetCode.toLowerCase());
-                      if (target) {
-                        router.replace(
-                          `/course?code=${encodeURIComponent(target.code)}&name=${encodeURIComponent(target.name)}&id=${target.id ?? ''}`
-                        );
-                      }
-                    }}
-                  >
-                    {allCourses.map(c => (
-                      <option key={c.code} value={c.code}>
-                        {c.name} · {c.code}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
+              )}
             </div>
 
             <TeacherPortal
@@ -1424,173 +1566,216 @@ function CourseDetailContent() {
             />
           </div>
         ) : (
-          <div className="workspace-page course-workspace fade-in">
-            <div className="workspace-title course-workspace-title">
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                  <span className="eyebrow" style={{ margin: 0 }}>KHÔNG GIAN MÔN HỌC &amp; GIA SƯ AI</span>
-                  <span
+          <div className="workspace-page course-workspace student-workspace fade-in">
+            <div
+              className="workspace-title course-workspace-title compact-assistant-header"
+              style={{
+                marginBottom: '4px',
+                paddingBottom: '0px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span className="eyebrow" style={{ margin: 0, fontSize: '10px' }}>
+                  KHÔNG GIAN MÔN HỌC &amp; GIA SƯ AI
+                </span>
+                <span
+                  style={{
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    padding: '1px 6px',
+                    borderRadius: '10px',
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    color: '#cbd5e1',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  <BookOpen size={11} />
+                  <span>Vai trò: Học viên</span>
+                </span>
+                <span style={{ color: 'rgba(255, 255, 255, 0.25)' }}>|</span>
+                <h1 style={{ margin: 0, fontSize: '1.05rem', lineHeight: 1.2, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  {activeCourse.name}
+                </h1>
+                {allCourses.length > 0 && (
+                  <div
                     style={{
-                      fontSize: '11px',
-                      fontWeight: 700,
-                      padding: '2px 8px',
-                      borderRadius: '12px',
-                      background: 'rgba(255, 255, 255, 0.1)',
-                      color: '#94a3b8',
-                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      position: 'relative',
                       display: 'inline-flex',
                       alignItems: 'center',
-                      gap: '4px',
+                      cursor: 'pointer',
                     }}
+                    title="Chuyển nhanh khóa học"
                   >
-                    <BookOpen size={12} />
-                    <span>Vai trò: Học viên</span>
-                  </span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                  <h1 style={{ margin: 0 }}>{activeCourse.name}</h1>
-                </div>
-                <p>Mã môn: {activeCourse.code || 'Moodle'}</p>
-              </div>
-
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                {allCourses.length > 0 && (
-                  <select
-                    className="course-select-input"
-                    value={activeCourse.code}
-                    onChange={e => {
-                      const target = allCourses.find(c => c.code === e.target.value);
-                      if (target) {
-                        router.replace(
-                          `/course?code=${encodeURIComponent(target.code)}&name=${encodeURIComponent(target.name)}&id=${target.id ?? ''}`
-                        );
-                      }
-                    }}
-                  >
-                    {allCourses.map(c => (
-                      <option key={c.code} value={c.code}>
-                        {c.name} ({c.code})
-                      </option>
-                    ))}
-                    {!allCourses.some(c => c.code.toLowerCase() === activeCourse.code.toLowerCase()) && (
-                      <option value={activeCourse.code}>
-                        {activeCourse.name} ({activeCourse.code})
-                      </option>
-                    )}
-                  </select>
+                    <button
+                      type="button"
+                      style={{
+                        width: '20px',
+                        height: '20px',
+                        borderRadius: '4px',
+                        background: 'rgba(124, 109, 242, 0.15)',
+                        border: '1px solid rgba(124, 109, 242, 0.35)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#cfc8ff',
+                        cursor: 'pointer',
+                        padding: 0,
+                        transition: 'all 0.2s ease',
+                      }}
+                      aria-label="Chuyển nhanh khóa học"
+                    >
+                      <ChevronDown size={13} />
+                    </button>
+                    <select
+                      value={activeCourse.code}
+                      onChange={e => {
+                        const target = allCourses.find(c => c.code === e.target.value);
+                        if (target) {
+                          router.replace(
+                            `/course?code=${encodeURIComponent(target.code)}&name=${encodeURIComponent(target.name)}&id=${target.id ?? ''}`
+                          );
+                        }
+                      }}
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        opacity: 0,
+                        width: '100%',
+                        height: '100%',
+                        cursor: 'pointer',
+                      }}
+                      title="Chuyển nhanh khóa học"
+                    >
+                      {allCourses.map(c => (
+                        <option key={c.code} value={c.code}>
+                          {c.name} ({c.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 )}
+                <span style={{ fontSize: '11px', color: '#9894ad' }}>· Mã môn: {activeCourse.code || 'Moodle'}</span>
               </div>
             </div>
 
           <div className={`tutor-layout ${isSourcePanelCollapsed ? 'source-collapsed' : ''}`}>
             {/* Source panel */}
             <aside className={`source-panel ${isSourcePanelCollapsed ? 'collapsed' : ''}`}>
-              <div className="panel-title">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                  <Folder size={15} style={{ color: '#a78bfa' }} />
-                  <strong>Nguồn tài liệu</strong>
+              <div className="source-panel-header">
+                <div className="panel-title">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                    <Folder size={15} style={{ color: '#a78bfa' }} />
+                    <strong>Nguồn tài liệu</strong>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                    <span>{selectedSourceNames.length} đã chọn</span>
+                    <button
+                      type="button"
+                      className="collapse-source-btn"
+                      onClick={() => setIsSourcePanelCollapsed(true)}
+                      title="Thu gọn danh sách tài liệu môn học"
+                      aria-label="Thu gọn danh sách tài liệu môn học"
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                  <span>{selectedSourceNames.length} đã chọn</span>
-                  <button
-                    type="button"
-                    className="collapse-source-btn"
-                    onClick={() => setIsSourcePanelCollapsed(true)}
-                    title="Thu gọn danh sách tài liệu môn học"
-                    aria-label="Thu gọn danh sách tài liệu môn học"
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                  >
-                    <ChevronLeft size={14} />
-                  </button>
-                </div>
+
+                <label className="source-search">
+                  <Search size={14} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                  <input
+                    value={sourceQuery}
+                    onChange={e => setSourceQuery(e.target.value)}
+                    placeholder="Tìm tài liệu môn học..."
+                  />
+                </label>
               </div>
 
-              <label className="source-search">
-                <Search size={14} style={{ color: '#94a3b8', flexShrink: 0 }} />
-                <input
-                  value={sourceQuery}
-                  onChange={e => setSourceQuery(e.target.value)}
-                  placeholder="Tìm tài liệu môn học..."
-                />
-              </label>
-
-              {visibleSources.length === 0 ? (
-                <div className="empty-state" style={{ padding: '1rem', fontSize: '13px' }}>
-                  Chưa có tài liệu nào trong khóa học này. Hãy nhấn "Thêm nguồn tài liệu" bên dưới hoặc đồng bộ từ Moodle.
-                </div>
-              ) : (
-                visibleSources.map(({ item, i }) => {
-                  const badge = getSourceBadge(item.type, item.name);
-                  return (
-                    <label className="source-item" key={`${item.name}-${i}`}>
-                      <input
-                        type="checkbox"
-                        checked={checked[i] ?? true}
-                        onChange={() =>
-                          setChecked(v => v.map((x, n) => (n === i ? !x : x)))
-                        }
-                      />
-                      <span className={`file-badge ${badge.className}`}>{badge.label}</span>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {item.url ? (
-                          <a
-                            href={item.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={e => e.stopPropagation()}
-                            style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                            title="Mở tài liệu gốc"
-                          >
-                            <span>{item.name}</span>
-                            <ExternalLink size={12} style={{ opacity: 0.7 }} />
-                          </a>
-                        ) : (
-                          item.name
-                        )}
-                        <small>
-                          {item.type === 'LINK' ? 'Liên kết Web' : item.type}
-                        </small>
-                      </span>
-                    </label>
-                  );
-                })
-              )}
-
-              <button className="add-source" onClick={handleAddSource} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                <Plus size={15} />
-                Thêm nguồn tài liệu (PDF, Word, Web)
-              </button>
-
-              <div
-                className={`grounded interactive-switch ${allowExternalSource ? 'external-on' : ''}`}
-                onClick={() => {
-                  setAllowExternalSource(prev => {
-                    const next = !prev;
-                    notify(
-                      next
-                        ? 'Đã bật: Cho phép liên hệ kiến thức thực tiễn ngoài giáo trình'
-                        : 'Đã bật: Chế độ bám sát nghiêm ngặt tài liệu môn học'
-                    );
-                    return next;
-                  });
-                }}
-                style={{ cursor: 'pointer' }}
-                title="Nhấp để bật/tắt quyền dùng nguồn kiến thức mở rộng bên ngoài"
-              >
-                <div className="grounded-header">
-                  <div className="grounded-header-left">
-                    {allowExternalSource ? <Globe size={15} style={{ color: '#38bdf8' }} /> : <Lock size={15} style={{ color: '#94a3b8' }} />}
-                    <strong className="grounded-title">{allowExternalSource ? 'Nguồn mở rộng' : 'Bám sát tài liệu'}</strong>
+              <div className="source-list-scroll">
+                {visibleSources.length === 0 ? (
+                  <div className="empty-state" style={{ padding: '1rem', fontSize: '13px' }}>
+                    Chưa có tài liệu nào trong khóa học này. Hãy nhấn "Thêm nguồn tài liệu" bên dưới hoặc đồng bộ từ Moodle.
                   </div>
-                  <span className={`unified-status-chip ${allowExternalSource ? 'on' : 'off'}`}>
-                    {allowExternalSource ? 'BẬT' : 'TẮT'}
-                  </span>
+                ) : (
+                  visibleSources.map(({ item, i }) => {
+                    const badge = getSourceBadge(item.type, item.name);
+                    return (
+                      <label className="source-item" key={`${item.name}-${i}`}>
+                        <input
+                          type="checkbox"
+                          checked={checked[i] ?? true}
+                          onChange={() =>
+                            setChecked(v => v.map((x, n) => (n === i ? !x : x)))
+                          }
+                        />
+                        <span className={`file-badge ${badge.className}`}>{badge.label}</span>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {item.url ? (
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                              title="Mở tài liệu gốc"
+                            >
+                              <span>{item.name}</span>
+                              <ExternalLink size={12} style={{ opacity: 0.7 }} />
+                            </a>
+                          ) : (
+                            item.name
+                          )}
+                          <small>
+                            {item.type === 'LINK' ? 'Liên kết Web' : item.type}
+                          </small>
+                        </span>
+                      </label>
+                    );
+                  })
+                )}
+
+                <button className="add-source" onClick={handleAddSource} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                  <Plus size={15} />
+                  Thêm nguồn tài liệu (PDF, Word, Web)
+                </button>
+              </div>
+
+              <div className="source-panel-footer">
+                <div
+                  className={`grounded interactive-switch ${allowExternalSource ? 'external-on' : ''}`}
+                  onClick={() => {
+                    setAllowExternalSource(prev => {
+                      const next = !prev;
+                      notify(
+                        next
+                          ? 'Đã bật: Cho phép liên hệ kiến thức thực tiễn ngoài giáo trình'
+                          : 'Đã bật: Chế độ bám sát nghiêm ngặt tài liệu môn học'
+                      );
+                      return next;
+                    });
+                  }}
+                  style={{ cursor: 'pointer' }}
+                  title="Nhấp để bật/tắt quyền dùng nguồn kiến thức mở rộng bên ngoài"
+                >
+                  <div className="grounded-header">
+                    <div className="grounded-header-left">
+                      {allowExternalSource ? <Globe size={15} style={{ color: '#38bdf8' }} /> : <Lock size={15} style={{ color: '#94a3b8' }} />}
+                      <strong className="grounded-title">{allowExternalSource ? 'Nguồn mở rộng' : 'Bám sát tài liệu'}</strong>
+                    </div>
+                    <span className={`unified-status-chip ${allowExternalSource ? 'on' : 'off'}`}>
+                      {allowExternalSource ? 'BẬT' : 'TẮT'}
+                    </span>
+                  </div>
+                  <p className="grounded-subtitle">
+                    {allowExternalSource
+                      ? 'AI kết hợp giáo trình với kiến thức thực tiễn và công nghệ hiện đại.'
+                      : 'AI phân tích nghiêm ngặt chỉ dựa trên các tài liệu đã chọn.'}
+                  </p>
                 </div>
-                <p className="grounded-subtitle">
-                  {allowExternalSource
-                    ? 'AI kết hợp giáo trình với kiến thức thực tiễn và công nghệ hiện đại.'
-                    : 'AI phân tích nghiêm ngặt chỉ dựa trên các tài liệu đã chọn.'}
-                </p>
               </div>
             </aside>
 
@@ -1612,10 +1797,11 @@ function CourseDetailContent() {
                     </button>
                   )}
                   {[
-                    { id: 'Chat', label: 'Hỏi đáp', icon: <MessageSquare size={14} /> },
+                    { id: 'Chat', label: 'Chat', icon: <MessageSquare size={14} /> },
                     { id: 'Tóm tắt', label: 'Tóm tắt', icon: <FileText size={14} /> },
-                    { id: 'Mindmap', label: 'Sơ đồ tư duy', icon: <GitFork size={14} /> },
-                    { id: 'Flashcard', label: 'Thẻ ghi nhớ', icon: <Layers size={14} /> },
+                    { id: 'Mindmap', label: 'Mindmap', icon: <GitFork size={14} /> },
+                    { id: 'Flashcard', label: 'Flashcard', icon: <Layers size={14} /> },
+                    { id: 'Slide', label: 'Slide', icon: <Layout size={14} /> },
                     { id: 'Trắc nghiệm', label: 'Trắc nghiệm', icon: <HelpCircle size={14} /> },
                   ].map(tab => (
                     <button

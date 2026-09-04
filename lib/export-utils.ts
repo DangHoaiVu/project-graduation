@@ -298,4 +298,7 @@ export async function exportChatMessageToDocx(text: string, courseTitle: string)
   URL.revokeObjectURL(url);
 }
 
+export * from './pptx-export';
+
+
 

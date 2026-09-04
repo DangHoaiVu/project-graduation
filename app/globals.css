@@ -1932,17 +1932,53 @@ button {
   min-width: 300px;
   max-width: 300px;
   border-right: 1px solid var(--line);
-  padding: 16px 14px;
+  padding: 14px 12px 12px;
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
   flex-shrink: 0;
   height: 100%;
   max-height: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden !important;
   min-height: 0;
   box-sizing: border-box;
   transition: opacity 0.2s ease, padding 0.25s ease;
+}
+
+.source-panel-header {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.source-list-scroll {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.source-list-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.source-list-scroll::-webkit-scrollbar-thumb {
+  background: rgba(124, 109, 242, 0.25);
+  border-radius: 4px;
+}
+
+.source-list-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(124, 109, 242, 0.45);
+}
+
+.source-panel-footer {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 8px;
 }
 
 .source-panel.collapsed {
@@ -6626,32 +6662,91 @@ body {
   box-sizing: border-box;
 }
 
-.course-workspace.teacher-workspace.assistant-tab-active {
+.course-workspace.teacher-workspace.assistant-tab-active,
+.course-workspace.student-workspace {
   height: calc(100vh - 64px) !important;
   max-height: calc(100vh - 64px) !important;
   overflow: hidden !important;
-  padding-bottom: 8px !important;
+  padding: 6px 16px 8px !important;
+  display: flex !important;
+  flex-direction: column !important;
 }
 
 .course-workspace.teacher-workspace.assistant-tab-active .teacher-portal-container.assistant-active {
   height: 100% !important;
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
 }
 
-.course-workspace.teacher-workspace.assistant-tab-active .teacher-assistant-chat-wrap {
+.course-workspace.teacher-workspace.assistant-tab-active .tutor-layout,
+.course-workspace.student-workspace .tutor-layout {
   height: 100% !important;
   min-height: 0 !important;
+  flex: 1 1 0% !important;
+  border-radius: 14px !important;
 }
 
-.teacher-assistant-chat-wrap .messages {
+.teacher-tabs-container.assistant-mode {
+  margin-bottom: 4px !important;
+  min-height: 30px !important;
+  padding-bottom: 0 !important;
+}
+
+.teacher-tabs-container.assistant-mode .teacher-tab-btn {
+  padding: 0.32rem 0.65rem !important;
+  font-size: 0.8rem !important;
+  border-radius: 6px 6px 0 0 !important;
+  gap: 0.3rem !important;
+}
+
+.course-workspace.teacher-workspace.assistant-tab-active .chat-panel .messages,
+.course-workspace.student-workspace .chat-panel .messages {
   flex: 1 1 0% !important;
   min-height: 0 !important;
   overflow-y: auto !important;
-  padding: 20px 4% !important;
+  padding: 16px 4% !important;
+  gap: 14px !important;
 }
 
-.teacher-assistant-chat-wrap .chat-compose {
+.course-workspace.teacher-workspace.assistant-tab-active .chat-panel .chat-compose,
+.course-workspace.student-workspace .chat-panel .chat-compose {
   flex-shrink: 0 !important;
-  margin: 10px 4% 14px !important;
+  margin: 0 3% 10px !important;
+  padding: 8px 12px !important;
+}
+
+.course-workspace.teacher-workspace.assistant-tab-active .chat-panel .chat-compose textarea,
+.course-workspace.student-workspace .chat-panel .chat-compose textarea {
+  height: 40px !important;
+  min-height: 40px !important;
+}
+
+.course-workspace.teacher-workspace.assistant-tab-active .chat-panel .tool-tabs,
+.course-workspace.student-workspace .chat-panel .tool-tabs {
+  height: 44px !important;
+  min-height: 44px !important;
+  padding: 0 12px !important;
+}
+
+.course-workspace.teacher-workspace.assistant-tab-active .chat-panel .tool-tabs button,
+.course-workspace.student-workspace .chat-panel .tool-tabs button {
+  padding: 5px 10px !important;
+  font-size: 11px !important;
+}
+
+.teacher-assistant-chat-wrap {
+  flex: 1 1 0% !important;
+  min-height: calc(100vh - 280px) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  background: linear-gradient(#171526, #141220);
+  border-radius: 16px;
+  border: 1px solid #26233a;
+  box-sizing: border-box;
 }
 
 .course-workspace.teacher-workspace:not(.assistant-tab-active) {
@@ -6682,16 +6777,16 @@ body {
 /* Responsive Tabs */
 .teacher-tabs-container {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.35rem;
   border-bottom: 1px solid rgba(124, 109, 242, 0.2);
-  margin-bottom: 1.25rem;
-  padding-bottom: 0.25rem;
+  margin-bottom: 6px;
+  padding-bottom: 0px;
   width: 100%;
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
   flex-shrink: 0 !important;
-  min-height: 46px !important;
+  min-height: 32px !important;
 }
 
 .teacher-tabs-container::-webkit-scrollbar {
@@ -6700,16 +6795,16 @@ body {
 
 .teacher-tab-btn {
   flex: 1 1 0%;
-  min-width: 130px;
-  padding: 0.75rem 0.85rem;
-  border-radius: 12px 12px 0 0;
+  min-width: 110px;
+  padding: 0.35rem 0.75rem;
+  border-radius: 8px 8px 0 0;
   border: none;
-  font-size: 0.92rem;
+  font-size: 0.82rem;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
+  gap: 0.35rem;
   transition: all 0.2s ease;
   white-space: nowrap;
   touch-action: manipulation;
@@ -6999,7 +7094,8 @@ body {
 .teacher-portal-container:has(.teacher-assistant-chat-wrap) .teacher-tabs-container,
 .teacher-workspace.assistant-tab-active .teacher-tabs-container {
   flex-shrink: 0 !important;
-  margin-bottom: 0.75rem !important;
+  margin-bottom: 4px !important;
+  min-height: 30px !important;
 }
 
 .teacher-assistant-chat-wrap {
@@ -7080,5 +7176,33 @@ body {
     position: sticky;
     bottom: 8px;
     padding: 0.65rem;
+  }
+}
+
+/* ── Slide Presentation Styling ─────────────────────────── */
+
+.slide-presentation-root.fullscreen-mode {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 99999 !important;
+  background: #090812 !important;
+  padding: 1.5rem !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  border: none !important;
+  overflow: auto !important;
+}
+
+@media print {
+  .slide-presentation-root .artifact-head,
+  .slide-presentation-root .slide-presentation-root > div:not([style*="aspect-ratio"]) {
+    display: none !important;
+  }
+
+  .slide-presentation-root {
+    background: #ffffff !important;
+    color: #000000 !important;
   }
 }
