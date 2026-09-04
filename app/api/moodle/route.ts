@@ -31,7 +31,7 @@ export async function GET(request: Request) {
   try {
     const site=await call<{userid:number;fullname:string;username?:string;userpictureurl?:string;userissiteadmin?:boolean}>('core_webservice_get_site_info');
     const courses=await call<Array<{id:number;shortname:string;fullname:string;progress?:number}>>('core_enrol_get_users_courses',{userid:String(site.userid)});
-    const [upcoming, gradeResults, courseEnrolledUsers, ...contents] = await Promise.all([
+    const [upcoming, gradeResults, courseEnrolledUsers, moodleUrlsRes, moodlePagesRes, ...contents] = await Promise.all([
       call<{events?:Array<{id:number;name:string;timestart:number;url?:string;course?:{fullname?:string}}>}>('core_calendar_get_calendar_upcoming_view'),
       Promise.allSettled(
         courses.slice(0, 20).map(course =>
@@ -72,8 +72,35 @@ export async function GET(request: Request) {
           })
         )
       ),
+      call<{ urls?: Array<{ id: number; coursemodule: number; course: number; name: string; externalurl: string }> }>(
+        'mod_url_get_urls_by_courses',
+        courses.slice(0, 20).reduce((acc, c, i) => ({ ...acc, [`courseids[${i}]`]: String(c.id) }), {})
+      ).catch(() => ({ urls: [] })),
+      call<{ pages?: Array<{ id: number; coursemodule: number; course: number; name: string; content?: string }> }>(
+        'mod_page_get_pages_by_courses',
+        courses.slice(0, 20).reduce((acc, c, i) => ({ ...acc, [`courseids[${i}]`]: String(c.id) }), {})
+      ).catch(() => ({ pages: [] })),
       ...courses.slice(0,20).map(course=>call<Array<{modules?:Array<{id:number;name:string;modname:string;contents?:Array<{filename:string;fileurl:string}>}>}>>('core_course_get_contents',{courseid:String(course.id)}).catch(()=>[])),
     ]);
+
+    const externalUrlMap = new Map<number, string>();
+    if (moodleUrlsRes && typeof moodleUrlsRes === 'object' && 'urls' in moodleUrlsRes && Array.isArray(moodleUrlsRes.urls)) {
+      moodleUrlsRes.urls.forEach(u => {
+        if (u.coursemodule && u.externalurl) {
+          externalUrlMap.set(u.coursemodule, u.externalurl);
+        }
+      });
+    }
+
+    const pageContentMap = new Map<number, string>();
+    if (moodlePagesRes && typeof moodlePagesRes === 'object' && 'pages' in moodlePagesRes && Array.isArray(moodlePagesRes.pages)) {
+      moodlePagesRes.pages.forEach(p => {
+        if (p.coursemodule && p.content) {
+          pageContentMap.set(p.coursemodule, p.content);
+        }
+      });
+    }
+
     const excludedMods = new Set(['forum', 'quiz', 'assign', 'assignment', 'feedback', 'survey', 'choice', 'chat', 'attendance']);
     const allowedExtensions = new Set(['pdf', 'doc', 'docx', 'ppt', 'pptx', 'txt']);
 
@@ -102,8 +129,11 @@ export async function GET(request: Request) {
 
           // If it is a web link / URL resource
           if (modType === 'url' || modType === 'page') {
+            const externalUrl = externalUrlMap.get(module.id);
             const directUrl = module.contents?.[0]?.fileurl || '';
             const fallbackUrl = `${MOODLE_URL.replace(/\/$/, '')}/mod/${module.modname}/view.php?id=${module.id}`;
+            const targetUrl = externalUrl || (directUrl ? (directUrl.startsWith('http') ? directUrl : `${directUrl}&token=${encodeURIComponent(moodleToken)}`) : fallbackUrl);
+
             return [
               {
                 courseId: courses[index]?.id,
@@ -112,7 +142,7 @@ export async function GET(request: Request) {
                 module: module.name,
                 type: 'LINK',
                 name: module.name,
-                url: directUrl || fallbackUrl,
+                url: targetUrl,
               },
             ];
           }

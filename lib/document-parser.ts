@@ -37,16 +37,64 @@ function setDocumentCache(key: string, value: string): void {
   documentTextCache.set(key, value);
 }
 
-export async function parseDocumentFromUrl(url: string, fileName: string): Promise<string> {
+export async function parseDocumentFromUrl(
+  url: string,
+  fileName: string,
+  options?: { authToken?: string }
+): Promise<string> {
   const cacheKey = `${fileName}::${url}`;
   if (documentTextCache.has(cacheKey)) {
     return documentTextCache.get(cacheKey)!;
   }
 
   try {
-    const response = await fetch(url);
+    let fetchUrl = url;
+    const headers: Record<string, string> = {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml,text/plain,application/pdf;q=0.9,*/*;q=0.8',
+    };
+
+    if (options?.authToken && !fetchUrl.includes('token=')) {
+      headers['Authorization'] = `Bearer ${options.authToken}`;
+    }
+
+    // If it's a direct public web link (not localhost, not moodle view.php wrapper), try Jina Reader directly
+    const isPublicWeb =
+      fetchUrl.startsWith('http') &&
+      !fetchUrl.includes('localhost') &&
+      !fetchUrl.includes('127.0.0.1') &&
+      !fetchUrl.includes('/mod/url/view.php') &&
+      !fetchUrl.includes('/mod/resource/view.php') &&
+      !fetchUrl.includes('pluginfile.php');
+
+    if (isPublicWeb) {
+      try {
+        const jinaUrl = `https://r.jina.ai/${fetchUrl}`;
+        const jinaRes = await fetch(jinaUrl, {
+          headers: {
+            'X-Return-Format': 'markdown',
+            'X-With-Generated-Alt': 'true',
+            Accept: 'text/markdown, text/plain',
+          },
+          signal: AbortSignal.timeout(8000),
+        });
+
+        if (jinaRes.ok) {
+          const markdown = await jinaRes.text();
+          if (markdown && markdown.trim().length > 120 && !markdown.includes('403 Forbidden') && !markdown.includes('Access Denied')) {
+            setDocumentCache(cacheKey, markdown.trim());
+            return markdown.trim();
+          }
+        }
+      } catch (jinaErr) {
+        console.warn(`Jina Reader direct attempt for ${fetchUrl} skipped/failed:`, jinaErr);
+      }
+    }
+
+    const response = await fetch(fetchUrl, { headers, signal: AbortSignal.timeout(10000) });
     if (!response.ok) {
-      console.warn(`Failed to fetch document from ${url}: status ${response.status}`);
+      console.warn(`Failed to fetch document from ${fetchUrl}: status ${response.status}`);
       return '';
     }
 
@@ -57,7 +105,7 @@ export async function parseDocumentFromUrl(url: string, fileName: string): Promi
     const isPdf =
       lowerName.endsWith('.pdf') ||
       contentType.includes('application/pdf') ||
-      url.toLowerCase().includes('.pdf');
+      fetchUrl.toLowerCase().includes('.pdf');
 
     if (isPdf) {
       const { text } = await extractText(new Uint8Array(arrayBuffer));
@@ -82,13 +130,12 @@ export async function parseDocumentFromUrl(url: string, fileName: string): Promi
     }
 
     // For Web links, HTML pages, and Moodle URL resources
-    let targetUrl = url;
-
-    // Check if the URL is a Moodle wrapper or contains a redirect link
+    let targetUrl = fetchUrl;
     const decoder = new TextDecoder('utf-8');
     const rawHtml = decoder.decode(arrayBuffer);
 
-    if (url.includes('/mod/url/view.php') || rawHtml.includes('urlworkaround')) {
+    // Check if the URL is a Moodle wrapper or contains a redirect link
+    if (fetchUrl.includes('/mod/url/view.php') || rawHtml.includes('urlworkaround')) {
       const match =
         rawHtml.match(/<div class="urlworkaround"[^>]*>\s*<a\s+[^>]*href="([^"]+)"/i) ||
         rawHtml.match(/<a\s+[^>]*class="urlworkaround"[^>]*href="([^"]+)"/i) ||
@@ -98,7 +145,7 @@ export async function parseDocumentFromUrl(url: string, fileName: string): Promi
       }
     }
 
-    // TIER 1: Jina Reader API for Public Web URLs (Returns clean, LLM-optimized Markdown)
+    // TIER 1: Jina Reader API for parsed targetUrl
     const isLocalHost =
       targetUrl.includes('localhost') ||
       targetUrl.includes('127.0.0.1') ||
@@ -114,12 +161,12 @@ export async function parseDocumentFromUrl(url: string, fileName: string): Promi
             'X-With-Generated-Alt': 'true',
             Accept: 'text/markdown, text/plain',
           },
-          signal: AbortSignal.timeout(6500),
+          signal: AbortSignal.timeout(7000),
         });
 
         if (jinaRes.ok) {
           const markdown = await jinaRes.text();
-          if (markdown && markdown.trim().length > 100) {
+          if (markdown && markdown.trim().length > 100 && !markdown.includes('403 Forbidden')) {
             setDocumentCache(cacheKey, markdown.trim());
             return markdown.trim();
           }
@@ -131,12 +178,12 @@ export async function parseDocumentFromUrl(url: string, fileName: string): Promi
 
     // TIER 2: Direct Scraper Fallback (Fetch destination directly if targetUrl is different)
     let htmlToClean = rawHtml;
-    if (targetUrl !== url) {
+    if (targetUrl !== fetchUrl) {
       try {
         const extRes = await fetch(targetUrl, {
           headers: {
             'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           },
           signal: AbortSignal.timeout(6000),
@@ -163,12 +210,12 @@ export async function parseDocumentFromUrl(url: string, fileName: string): Promi
 }
 
 /**
- * Strips HTML tags, scripts, styles, navigations, and extracts readable text.
+ * Strips HTML tags, scripts, styles, navigations, and extracts structured, readable text.
  */
 export function extractTextFromHtml(html: string): string {
   if (!html) return '';
 
-  // 1. Remove script, style, svg, noscript, nav, header, footer tags and their contents
+  // 1. Remove script, style, svg, noscript, nav, header, footer, iframe tags and their contents
   let cleaned = html
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
@@ -176,19 +223,34 @@ export function extractTextFromHtml(html: string): string {
     .replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, ' ')
     .replace(/<nav\b[^<]*(?:(?!<\/nav>)<[^<]*)*<\/nav>/gi, ' ')
     .replace(/<footer\b[^<]*(?:(?!<\/footer>)<[^<]*)*<\/footer>/gi, ' ')
-    .replace(/<header\b[^<]*(?:(?!<\/header>)<[^<]*)*<\/header>/gi, ' ');
+    .replace(/<header\b[^<]*(?:(?!<\/header>)<[^<]*)*<\/header>/gi, ' ')
+    .replace(/<aside\b[^<]*(?:(?!<\/aside>)<[^<]*)*<\/aside>/gi, ' ')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, ' ');
 
-  // 2. Replace structural block tags with newlines
+  // 2. Format Headings with Markdown equivalents
   cleaned = cleaned
-    .replace(/<\/(p|div|section|article|blockquote|h[1-6]|tr)>/gi, '\n\n')
+    .replace(/<h1\b[^>]*>(.*?)<\/h1>/gi, '\n\n# $1\n\n')
+    .replace(/<h2\b[^>]*>(.*?)<\/h2>/gi, '\n\n## $1\n\n')
+    .replace(/<h3\b[^>]*>(.*?)<\/h3>/gi, '\n\n### $1\n\n')
+    .replace(/<h[4-6]\b[^>]*>(.*?)<\/h[4-6]>/gi, '\n\n#### $1\n\n');
+
+  // 3. Format Code Blocks and Pre tags
+  cleaned = cleaned
+    .replace(/<pre\b[^>]*><code\b[^>]*>([\s\S]*?)<\/code><\/pre>/gi, '\n\n```\n$1\n```\n\n')
+    .replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, '\n\n```\n$1\n```\n\n')
+    .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, '`$1`');
+
+  // 4. Replace structural block tags with newlines
+  cleaned = cleaned
+    .replace(/<\/(p|div|section|article|blockquote|tr)>/gi, '\n\n')
     .replace(/<br\s*[\/]?>/gi, '\n')
     .replace(/<li\b[^>]*>/gi, '\n• ')
     .replace(/<\/(td|th)>/gi, ' | ');
 
-  // 3. Remove all remaining HTML tags
+  // 5. Remove all remaining HTML tags
   cleaned = cleaned.replace(/<[^>]+>/g, ' ');
 
-  // 4. Decode common HTML entities
+  // 6. Decode common HTML entities
   cleaned = cleaned
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
@@ -200,7 +262,7 @@ export function extractTextFromHtml(html: string): string {
     .replace(/&#x2F;/gi, '/')
     .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(Number(dec)));
 
-  // 5. Clean up whitespace
+  // 7. Clean up whitespace
   return cleaned
     .split('\n')
     .map(line => line.trim())

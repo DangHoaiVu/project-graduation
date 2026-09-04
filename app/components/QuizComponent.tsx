@@ -18,6 +18,8 @@ import {
   HelpCircle,
   Award,
   BookX,
+  Check,
+  X,
 } from 'lucide-react';
 import { QuizQuestion } from '@/app/api/quiz/route';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
@@ -54,6 +56,15 @@ export function QuizComponent({
   const [currentIdx, setCurrentIdx] = useState<number>(0);
   const [userAnswers, setUserAnswers] = useState<Record<number, number | number[]>>({});
   const [submitted, setSubmitted] = useState<boolean>(false);
+
+  // Clear previous course test questions when course changes
+  React.useEffect(() => {
+    setQuizQuestions(null);
+    setUserAnswers({});
+    setSubmitted(false);
+    setCurrentIdx(0);
+    setCustomTopic('');
+  }, [courseTitle, courseCode, courseId]);
 
   // Generate Quiz API call
   const handleStartQuiz = async () => {
@@ -452,17 +463,6 @@ export function QuizComponent({
               Làm lại đề này
             </button>
           )}
-
-          <button
-            onClick={() => {
-              window.print();
-              notify('Đã mở giao diện in / lưu PDF đề thi');
-            }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-          >
-            <Printer size={14} />
-            In đề thi
-          </button>
         </div>
       </div>
 
@@ -552,14 +552,18 @@ export function QuizComponent({
               ? (currentQ.answers || (typeof currentQ.answer === 'number' ? [currentQ.answer] : [])).includes(cIdx)
               : currentQ.answer === cIdx;
 
+            const isMissed = submitted && isMultiSelect && isCorrect && !isSelected;
+
             let choiceClass = 'quiz-choice-btn';
+            if (isMultiSelect) choiceClass += ' multi-choice';
             if (isSelected) choiceClass += ' selected';
             if (submitted) {
               if (isCorrect) choiceClass += ' correct-answer';
               else if (isSelected && !isCorrect) choiceClass += ' wrong-answer';
+              else if (isMissed) choiceClass += ' missed-answer';
             }
 
-            const prefix = isMultiSelect ? (isSelected ? '[✓]' : '[ ]') : String.fromCharCode(65 + cIdx);
+            const letter = String.fromCharCode(65 + cIdx);
 
             return (
               <button
@@ -569,10 +573,37 @@ export function QuizComponent({
                 onClick={() => handleSelectAnswer(currentIdx, cIdx)}
                 disabled={submitted}
               >
-                <span className="choice-prefix" style={{ fontSize: isMultiSelect ? '15px' : undefined }}>{prefix}</span>
+                <div className={`choice-prefix ${isMultiSelect ? 'checkbox-style' : 'radio-style'}`}>
+                  {isMultiSelect ? (
+                    isSelected ? (
+                      <Check size={14} strokeWidth={3.5} className="choice-check-icon" />
+                    ) : (
+                      <span className="choice-letter">{letter}</span>
+                    )
+                  ) : (
+                    <span className="choice-letter">{letter}</span>
+                  )}
+                </div>
                 <span className="choice-text">{choice}</span>
-                {submitted && isCorrect && <span className="choice-badge-check">Đúng</span>}
-                {submitted && isSelected && !isCorrect && <span className="choice-badge-wrong">Sai</span>}
+
+                {submitted && isCorrect && isSelected && (
+                  <span className="choice-badge-status correct">
+                    <Check size={12} strokeWidth={3} />
+                    <span>Đúng</span>
+                  </span>
+                )}
+                {submitted && isMissed && (
+                  <span className="choice-badge-status missed">
+                    <Check size={12} strokeWidth={3} />
+                    <span>Đáp án đúng</span>
+                  </span>
+                )}
+                {submitted && isSelected && !isCorrect && (
+                  <span className="choice-badge-status wrong">
+                    <X size={12} strokeWidth={3} />
+                    <span>Sai</span>
+                  </span>
+                )}
               </button>
             );
           })}

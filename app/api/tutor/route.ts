@@ -162,24 +162,51 @@ export async function POST(request: Request) {
       }
     }
 
+    // Detect structural / meta queries about the selected documents (TOC, chapters, overview, summary)
+    const lowerQ = question.toLowerCase();
+    const isDocOverviewQuery =
+      lowerQ.includes('mục lục') ||
+      lowerQ.includes('tóm tắt') ||
+      lowerQ.includes('tổng quan') ||
+      lowerQ.includes('tài liệu trên') ||
+      lowerQ.includes('tài liệu này') ||
+      lowerQ.includes('bao nhiêu chương') ||
+      lowerQ.includes('các chương') ||
+      lowerQ.includes('nội dung của tài liệu') ||
+      lowerQ.includes('gồm những gì') ||
+      lowerQ.includes('table of contents') ||
+      lowerQ.includes('overview') ||
+      lowerQ.includes('outline');
+
     if (compiledDocs.length > 0) {
       try {
-        const relevantChunks = await retrieveRelevantChunks(question, compiledDocs, {
-          topK: 6,
-          maxTotalChars: 16000,
-          minSimilarity: 0.15,
-        });
-
-        if (relevantChunks.length > 0) {
-          documentContext = formatChunksForPrompt(relevantChunks);
-        } else {
-          const maxPerDoc = Math.max(2500, Math.floor(25000 / compiledDocs.length));
+        if (isDocOverviewQuery) {
+          // Provide structural overview from each compiled document (first parts contain TOC/headings)
+          const maxPerDoc = Math.max(3500, Math.floor(25000 / compiledDocs.length));
           documentContext = compiledDocs
             .map(
               (doc, idx) =>
-                `--- TÀI LIỆU [${idx + 1}]: "${doc.title}" ---\n${doc.text.slice(0, maxPerDoc)}`
+                `--- TÀI LIỆU [${idx + 1}]: "${doc.title}" (Tổng quan & trích đoạn đầu) ---\n${doc.text.slice(0, maxPerDoc)}`
             )
             .join('\n\n');
+        } else {
+          const relevantChunks = await retrieveRelevantChunks(question, compiledDocs, {
+            topK: 6,
+            maxTotalChars: 16000,
+            minSimilarity: 0.12,
+          });
+
+          if (relevantChunks.length > 0) {
+            documentContext = formatChunksForPrompt(relevantChunks);
+          } else {
+            const maxPerDoc = Math.max(2500, Math.floor(25000 / compiledDocs.length));
+            documentContext = compiledDocs
+              .map(
+                (doc, idx) =>
+                  `--- TÀI LIỆU [${idx + 1}]: "${doc.title}" ---\n${doc.text.slice(0, maxPerDoc)}`
+              )
+              .join('\n\n');
+          }
         }
       } catch (ragErr) {
         console.warn('Semantic RAG retrieval error, fallback to basic context:', ragErr);
@@ -195,11 +222,26 @@ export async function POST(request: Request) {
 
     // 2. Prepare System Prompt with Domain Guardrail & Answer Style
     const subjectName = course || 'môn học hiện tại';
+    const selectedTopicsStr = effectiveSourceNames.length > 0
+      ? effectiveSourceNames.join('; ')
+      : 'Giáo trình và tài liệu môn học';
 
-    const domainGuardrail = `QUY TẮC PHẠM VI MÔN HỌC (SUBJECT DOMAIN GUARDRAIL - BẮT BUỘC):
-- Bạn là Trợ lý học tập chuyên biệt cho môn: "${subjectName}".
-- TUYỆT ĐỐI KHÔNG trả lời những câu hỏi hoàn toàn lạc đề, không liên quan đến môn ${subjectName} (Ví dụ: hỏi bài tập Toán cao cấp trong lớp Lịch sử/Triết học, hỏi công thức nấu ăn/thời tiết trong lớp Lập trình Web).
-- NẾU câu hỏi của sinh viên hoàn toàn nằm ngoài phạm vi môn ${subjectName}, hãy TỪ CHỐI LỊCH SỰ và hướng dẫn: "Câu hỏi này nằm ngoài phạm vi môn học ${subjectName}. Bạn vui lòng đặt câu hỏi liên quan đến kiến thức môn ${subjectName} để mình hỗ trợ tốt nhất nhé!".`;
+    const domainGuardrail = allowExternalSource
+      ? `CHẾ ĐỘ MỞ RỘNG KIẾN THỨC ĐANG BẬT (EXTERNAL SOURCE MODE - ACTIVE):
+- Sinh viên ĐANG BẬT chế độ 'Nguồn mở rộng'.
+- Bạn ĐƯỢC PHÉP VÀ KHUYẾN KHÍCH trả lời, phân tích, giải thích chi tiết mọi câu hỏi về các công nghệ, ngôn ngữ lập trình, framework, kiến thức liên quan đến môn học và thực tế ngành.
+- TUYỆT ĐỐI KHÔNG từ chối câu hỏi khi chế độ mở rộng đang bật.`
+      : `CHẾ ĐỘ BÁM SÁT TÀI LIỆU (STRICT GROUNDED MODE):
+- Bạn là Trợ lý Học tập AI chuyên trách cho môn: "${subjectName}".
+- Danh sách tài liệu và chủ đề đang được chọn gồm: "${selectedTopicsStr}".
+- KHI SINH VIÊN HỎI VỀ BẢN THÂN TÀI LIỆU (Ví dụ: hỏi mục lục, tóm tắt, cấu trúc các chương/phần, nội dung tài liệu này nói về gì...): Bạn PHẢI đọc nội dung văn bản tài liệu được cung cấp bên dưới, tổng hợp và liệt kê mục lục/cấu trúc các phần rõ ràng cho sinh viên. TUYỆT ĐỐI KHÔNG từ chối các câu hỏi về cấu trúc, mục lục hoặc tổng quan tài liệu.
+- KHI CÂU HỎI THUỘC NỘI DUNG TÀI LIỆU HOẶC MÔN HỌC: Hãy giải thích đầy đủ, chính xác, sư phạm và nhiệt tình.
+- CHỈ từ chối khi câu hỏi hoàn toàn lạc đề, không có chút liên quan nào tới môn học và không xuất hiện trong tài liệu (Ví dụ: hỏi công thức nấu ăn, thời tiết, giải trí). Khi từ chối, hãy phản hồi nhẹ nhàng theo mẫu:
+  "Nội dung này hiện không có trong các nguồn tài liệu đang chọn hoặc chưa nằm trong phạm vi kiến thức chúng ta đã học của môn **${subjectName}**.
+  
+  💡 **Gợi ý cho bạn:**
+  - Bạn có thể kiểm tra và tích chọn thêm các nguồn tài liệu liên quan ở danh sách bên trái.
+  - Hoặc bật chế độ **'Mở rộng thực tế'** (ở góc dưới) để mình có thể tra cứu và giải đáp mở rộng thêm cho bạn nhé!"`;
 
     const styleInstruction =
       answerStyle === 'detailed'
@@ -211,11 +253,12 @@ export async function POST(request: Request) {
 - Sử dụng gạch đầu dòng rõ ràng, không giải thích lan man hay dài dòng, giúp sinh viên nắm bắt câu trả lời nhanh chóng.`;
 
     const externalInstruction = allowExternalSource
-      ? `CHẾ ĐỘ MỞ RỘNG (ALLOW EXTERNAL SOURCES - OUT-OF-THE-BOX THINKING):
-- Lấy tài liệu môn học làm nền tảng cốt lõi, đồng thời ĐƯỢC PHÉP liên hệ thực tế ngành, công nghệ hiện đại và góc nhìn sáng tạo (out-of-the-box) thuộc lĩnh vực của môn ${subjectName}.
-- Khi đưa thêm thông tin thực tế nằm ngoài tài liệu cung cấp, hãy ghi chú rõ '[Mở rộng thực tế]' hoặc '[Góc nhìn chuyên sâu]'.`
-      : `CHẾ ĐỘ BÁM SÁT TÀI LIỆU (STRICT GROUNDED MODE):
-- Phân tích nghiêm ngặt và chỉ tổng hợp dựa trên văn bản tài liệu môn học được cung cấp bên dưới. Không tự bổ sung thực thể hoàn toàn nằm ngoài tài liệu.`;
+      ? `HƯỚNG DẪN TRẢ LỜI KHI BẬT MỞ RỘNG:
+- Lấy các tài liệu môn học làm nền tảng cốt lõi nếu có, đồng thời mở rộng và giải thích toàn diện câu hỏi của sinh viên dựa trên kiến thức chuyên môn thực tế ngành và tra cứu hiện đại.
+- Khi đưa thêm thông tin thực tế ngoài giáo trình, hãy phân tích logic, khách quan và chuyên nghiệp.`
+      : `HƯỚNG DẪN TRẢ LỜI KHI BÁM SÁT TÀI LIỆU:
+- Phân tích và giải thích dựa trên nội dung tài liệu và các chủ đề chuyên môn của môn học ${subjectName} đã chọn ("${selectedTopicsStr}").
+- Nếu câu hỏi nằm ngoài các nguồn tài liệu đã chọn, thông báo lịch sự theo mẫu hướng dẫn ở trên.`;
 
     const factualGuardrail = `QUY TẮC BẢO ĐẢM TÍNH XÁC THỰC LỊCH SỬ & SỰ KIỆN (ANTI-HALLUCINATION & FACTUAL ACCURACY - BẮT BUỘC):
 - TUYỆT ĐỐI KHÔNG BỊA ĐẶT hay suy diễn sai lệch về: Mốc thời gian (năm/tháng/ngày), địa điểm tổ chức, nhân vật, số liệu và nội dung các kỳ Đại hội/sự kiện lịch sử (Ví dụ: Đại hội I họp 1935 tại Ma Cao, Đại hội II họp 1951 tại Chiêm Hóa - Tuyên Quang, Đại hội III họp 1960 tại Hà Nội, Đại hội IV họp 1976 tại Hà Nội, Đại hội VI Đổi mới họp 1986 tại Hà Nội, Đại hội XIV họp 1/2026 tại Hà Nội).

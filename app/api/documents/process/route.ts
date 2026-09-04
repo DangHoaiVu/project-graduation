@@ -4,6 +4,7 @@ import { courses, documents } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { uploadBufferToCloudinary } from '@/lib/cloudinary';
 import { indexDocuments } from '@/lib/rag';
+import { parseDocumentFromUrl } from '@/lib/document-parser';
 
 export async function POST(request: Request) {
   try {
@@ -43,8 +44,14 @@ export async function POST(request: Request) {
         if (!content) {
           if (file.type === 'text/plain' || file.name.endsWith('.txt')) {
             content = await file.text();
+          } else if (fileUrl) {
+            try {
+              content = await parseDocumentFromUrl(fileUrl, file.name);
+            } catch {
+              content = `[Document File: ${file.name}] (URL: ${fileUrl})`;
+            }
           } else {
-            content = `[Document File: ${file.name}]${fileUrl ? ` (URL: ${fileUrl})` : ''}`;
+            content = `[Document File: ${file.name}]`;
           }
         }
       }
@@ -61,6 +68,18 @@ export async function POST(request: Request) {
       courseId = body.courseId || '';
       moodleCourseId = body.moodleCourseId ? Number(body.moodleCourseId) : null;
       fileUrl = body.fileUrl || null;
+    }
+
+    // If content is empty but a web link is provided, parse the web content directly
+    if (!content && fileUrl && fileUrl.startsWith('http')) {
+      try {
+        const parsed = await parseDocumentFromUrl(fileUrl, title);
+        if (parsed && parsed.trim().length > 50) {
+          content = parsed.trim();
+        }
+      } catch (err) {
+        console.warn('Auto crawl web document on process warning:', err);
+      }
     }
 
     if (!title || (!content && !fileUrl)) {

@@ -93,11 +93,29 @@ function Flashcards({
       </div>
 
       {cards.length > 0 ? (
-        <button className={`flash-card ${flip ? 'flipped' : ''}`} onClick={() => setFlip(!flip)}>
-          <small>{flip ? 'GIẢI THÍCH / ĐÁP ÁN' : 'KHÁI NIỆM / CÂU HỎI'}</small>
-          <strong>{flip ? cards[i]?.back : cards[i]?.front}</strong>
-          <span>Nhấn để lật thẻ</span>
-        </button>
+        <div
+          role="button"
+          tabIndex={0}
+          className={`flash-card ${flip ? 'flipped' : ''}`}
+          onClick={() => setFlip(!flip)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setFlip(!flip);
+            }
+          }}
+        >
+          <div className="flash-side-badge">
+            <span className="flash-side-dot" />
+            <span>{flip ? 'GIẢI THÍCH / ĐÁP ÁN' : 'KHÁI NIỆM / CÂU HỎI'}</span>
+          </div>
+          <div className="flash-card-content">
+            <MarkdownRenderer content={flip ? (cards[i]?.back || '') : (cards[i]?.front || '')} />
+          </div>
+          <div className="flash-card-footer">
+            <span>{flip ? '🔄 Nhấn để xem câu hỏi' : '🔄 Nhấn để lật xem đáp án'}</span>
+          </div>
+        </div>
       ) : (
         <div className="empty-state">Chưa có thẻ ghi nhớ nào. Nhấn "Thêm thẻ" để tạo mới.</div>
       )}

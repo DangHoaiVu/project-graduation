@@ -94,6 +94,24 @@ export async function POST(request: Request) {
           const extractedText = await parseDocumentFromUrl(src.url, src.name);
           if (extractedText && extractedText.trim()) {
             docMap.set(lowerName, extractedText);
+            if (db) {
+              try {
+                let targetCourseId = (body.courseId && typeof body.courseId === 'string' && body.courseId.includes('-')) ? body.courseId : '';
+                if (!targetCourseId) {
+                  const existingCourses = await db.select().from(courses).limit(1);
+                  if (existingCourses.length > 0) targetCourseId = existingCourses[0].id;
+                }
+                if (targetCourseId) {
+                  await db.insert(documents).values({
+                    courseId: targetCourseId,
+                    title: src.name,
+                    content: extractedText.slice(0, 1000000),
+                  });
+                }
+              } catch {
+                // background caching error is non-fatal
+              }
+            }
           }
         } catch {
           // ignore

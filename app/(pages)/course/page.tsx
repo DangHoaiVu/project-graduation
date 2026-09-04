@@ -38,6 +38,11 @@ import {
   ShieldCheck,
   Award,
   Calendar,
+  CalendarCheck,
+  Clock,
+  AlertCircle,
+  CheckSquare,
+  ListTodo,
   Flame,
   UploadCloud,
   Layout,
@@ -110,11 +115,29 @@ function Flashcards({
       </div>
 
       {cards.length > 0 ? (
-        <button className={`flash-card ${flip ? 'flipped' : ''}`} onClick={() => setFlip(!flip)}>
-          <small>{flip ? 'GIẢI THÍCH / ĐÁP ÁN' : 'KHÁI NIỆM / CÂU HỎI'}</small>
-          <strong>{flip ? cards[i]?.back : cards[i]?.front}</strong>
-          <span>Nhấn để lật thẻ</span>
-        </button>
+        <div
+          role="button"
+          tabIndex={0}
+          className={`flash-card ${flip ? 'flipped' : ''}`}
+          onClick={() => setFlip(!flip)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setFlip(!flip);
+            }
+          }}
+        >
+          <div className="flash-side-badge">
+            <span className="flash-side-dot" />
+            <span>{flip ? 'GIẢI THÍCH / ĐÁP ÁN' : 'KHÁI NIỆM / CÂU HỎI'}</span>
+          </div>
+          <div className="flash-card-content">
+            <MarkdownRenderer content={flip ? (cards[i]?.back || '') : (cards[i]?.front || '')} />
+          </div>
+          <div className="flash-card-footer">
+            <span>{flip ? '🔄 Nhấn để xem câu hỏi' : '🔄 Nhấn để lật xem đáp án'}</span>
+          </div>
+        </div>
       ) : (
         <div className="empty-state">Chưa có thẻ ghi nhớ nào. Nhấn "Thêm thẻ" để tạo mới.</div>
       )}
@@ -780,7 +803,7 @@ function CourseDetailContent() {
     },
   ]);
 
-  // Reset chat when switching courses
+  // Reset chat and all study artifacts (mindmap, flashcard, summary, slide) when switching courses
   useEffect(() => {
     setChat([
       {
@@ -789,7 +812,9 @@ function CourseDetailContent() {
         sources: [`${courseSources.length} tài liệu sẵn sàng`],
       },
     ]);
-  }, [activeCourse.code, activeCourse.name, courseSources.length]);
+    setArtifactsMap({});
+    setInput('');
+  }, [activeCourse.id, activeCourse.code, activeCourse.name, courseSources.length]);
 
   const [input, setInput] = useState(
     initialIntent.startsWith('__') || initialIntent.startsWith('Tiếp tục học') ? '' : initialIntent
@@ -804,6 +829,7 @@ function CourseDetailContent() {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const selectedModel = 'auto';
   const [showGradeHistory, setShowGradeHistory] = useState<boolean>(false);
+  const [showActivityModal, setShowActivityModal] = useState<boolean>(false);
   const [teacherTab, setTeacherTab] = useState<'assistant' | 'grades' | 'quiz'>('assistant');
   const askedIntent = useRef(false);
 
@@ -831,6 +857,90 @@ function CourseDetailContent() {
     );
   }, [moodle?.examResults, activeCourse.id, activeCourse.code, activeCourse.name]);
 
+  // Compute course activities (Moodle deadlines & exams merged by base name)
+  const courseActivities = useMemo(() => {
+    type ActivityEntry = {
+      id: string | number;
+      name: string;
+      courseName: string;
+      openTimestamp?: number;
+      closeTimestamp?: number;
+      timestamp: number;
+      url?: string;
+      type: 'homework' | 'exam' | 'quiz' | 'task';
+    };
+
+    const groupedMap = new Map<string, ActivityEntry>();
+
+    if (moodle?.deadlines?.length) {
+      moodle.deadlines.forEach(d => {
+        const matchesCourse =
+          (activeCourse.name && (d.courseName?.toLowerCase().includes(activeCourse.name.toLowerCase()) || activeCourse.name.toLowerCase().includes(d.courseName?.toLowerCase()))) ||
+          (activeCourse.code && (d.name?.toLowerCase().includes(activeCourse.code.toLowerCase()) || d.courseName?.toLowerCase().includes(activeCourse.code.toLowerCase())));
+
+        if (matchesCourse) {
+          const rawName = d.name.trim();
+          let baseName = rawName;
+          let eventKind: 'open' | 'close' | 'general' = 'general';
+
+          // Detect "opens" or "mở" / "bắt đầu"
+          const opensMatch = /(?:\s+opens|\s+mở|\s+bắt đầu)$/i.exec(rawName);
+          if (opensMatch) {
+            baseName = rawName.slice(0, opensMatch.index).trim();
+            eventKind = 'open';
+          } else {
+            // Detect "closes", "is due", "due", "đóng", "hết hạn", "kết thúc"
+            const closesMatch = /(?:\s+closes|\s+is due|\s+due|\s+đóng|\s+hết hạn|\s+kết thúc|\s+hạn chót)$/i.exec(rawName);
+            if (closesMatch) {
+              baseName = rawName.slice(0, closesMatch.index).trim();
+              eventKind = 'close';
+            }
+          }
+
+          const lowerBase = baseName.toLowerCase();
+          let type: 'homework' | 'exam' | 'quiz' | 'task' = 'homework';
+          if (lowerBase.includes('thi') || lowerBase.includes('exam') || lowerBase.includes('kiểm tra')) {
+            type = lowerBase.includes('trắc nghiệm') || lowerBase.includes('quiz') ? 'quiz' : 'exam';
+          }
+
+          const existing = groupedMap.get(lowerBase);
+          if (existing) {
+            if (eventKind === 'open') {
+              existing.openTimestamp = d.timestamp;
+            } else if (eventKind === 'close') {
+              existing.closeTimestamp = d.timestamp;
+            }
+            if (d.url && !existing.url) {
+              existing.url = d.url;
+            }
+            existing.timestamp = existing.closeTimestamp || existing.openTimestamp || d.timestamp;
+          } else {
+            const entry: ActivityEntry = {
+              id: d.id,
+              name: baseName,
+              courseName: d.courseName || activeCourse.name,
+              openTimestamp: eventKind === 'open' ? d.timestamp : undefined,
+              closeTimestamp: eventKind === 'close' ? d.timestamp : undefined,
+              timestamp: d.timestamp,
+              url: d.url,
+              type,
+            };
+            groupedMap.set(lowerBase, entry);
+          }
+        }
+      });
+    }
+
+    const list = Array.from(groupedMap.values());
+    list.forEach(item => {
+      if (item.closeTimestamp && item.openTimestamp) {
+        item.timestamp = item.closeTimestamp;
+      }
+    });
+
+    return list.sort((a, b) => a.timestamp - b.timestamp);
+  }, [moodle?.deadlines, activeCourse.name, activeCourse.code]);
+
   // Handler to ask AI about an exam result without auto-sending
   const handleAskAiAboutGrade = (res: ExamResult) => {
     const prompt = res.feedback
@@ -842,16 +952,17 @@ function CourseDetailContent() {
     notify(`Đã đưa bài "${res.name}" vào ô hỏi AI`);
   };
 
-  // Close drawer on Escape key
+  // Close drawers on Escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && showGradeHistory) {
-        setShowGradeHistory(false);
+      if (e.key === 'Escape') {
+        if (showGradeHistory) setShowGradeHistory(false);
+        if (showActivityModal) setShowActivityModal(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showGradeHistory]);
+  }, [showGradeHistory, showActivityModal]);
 
   // Auto cleanup RAM vector cache on course unmount / exit
   useEffect(() => {
@@ -1819,7 +1930,38 @@ function CourseDetailContent() {
                 <div className="tool-tabs-actions">
                   <button
                     type="button"
-                    onClick={() => setShowGradeHistory(prev => !prev)}
+                    onClick={() => {
+                      setShowGradeHistory(false);
+                      setShowActivityModal(prev => !prev);
+                    }}
+                    className="grade-history-tab-btn"
+                    title={showActivityModal ? 'Ẩn hoạt động (Esc)' : 'Xem bài tập, lịch thi & hạn nộp môn học'}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <CalendarCheck size={14} />
+                    <span>Hoạt động</span>
+                    {courseActivities.length > 0 && (
+                      <span
+                        style={{
+                          background: showActivityModal ? '#20bfa9' : 'rgba(32, 191, 169, 0.3)',
+                          color: '#fff',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          padding: '1px 6px',
+                          borderRadius: '999px',
+                        }}
+                      >
+                        {courseActivities.length}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowActivityModal(false);
+                      setShowGradeHistory(prev => !prev);
+                    }}
                     className="grade-history-tab-btn"
                     title={showGradeHistory ? 'Ẩn bảng điểm (Esc)' : 'Xem kết quả học tập & nhận xét môn học'}
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
@@ -2043,6 +2185,7 @@ function CourseDetailContent() {
                 <div className="tool-workspace-container">
                   {tool === 'Trắc nghiệm' ? (
                     <QuizComponent
+                      key={`quiz-${activeCourse.id}-${activeCourse.code}`}
                       courseTitle={activeCourse.name}
                       courseCode={activeCourse.code}
                       courseId={activeCourse.id}
@@ -2053,6 +2196,7 @@ function CourseDetailContent() {
                     />
                   ) : (
                     <StudyArtifact
+                      key={`study-${tool}-${activeCourse.id}-${activeCourse.code}`}
                       type={tool}
                       artifact={artifactsMap[tool] ?? null}
                       courseTitle={activeCourse.name}
@@ -2461,6 +2605,453 @@ function CourseDetailContent() {
               <span style={{ fontSize: '12px', color: '#94a3b8' }}>
                 Tổng cộng {courseExamResults.length} đầu điểm môn học
               </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Activity / Homework / Exams Modal (Simplified) */}
+      {showActivityModal && (
+        <div
+          className="grade-modal-overlay"
+          onClick={() => setShowActivityModal(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(5, 4, 15, 0.78)',
+            backdropFilter: 'blur(8px)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.25rem',
+            animation: 'fadeIn 0.2s ease',
+          }}
+        >
+          <div
+            className="grade-modal-card"
+            onClick={e => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '680px',
+              maxHeight: '86vh',
+              background: 'linear-gradient(180deg, #18152e 0%, #110e22 100%)',
+              border: '1px solid rgba(32, 191, 169, 0.35)',
+              borderRadius: '20px',
+              boxShadow: '0 25px 80px rgba(0, 0, 0, 0.7), 0 0 40px rgba(32, 191, 169, 0.15)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            {/* Modal Header */}
+            <div
+              style={{
+                padding: '1.2rem 1.5rem',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                background: 'rgba(255, 255, 255, 0.02)',
+                flexShrink: 0,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', minWidth: 0 }}>
+                <div
+                  style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '12px',
+                    background: 'linear-gradient(135deg, #20bfa9, #148373)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    boxShadow: '0 4px 14px rgba(32, 191, 169, 0.4)',
+                    color: '#fff',
+                  }}
+                >
+                  <CalendarCheck size={20} />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: '#fff' }}>
+                      Hoạt động & Lịch môn học
+                    </h3>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: '999px',
+                        background: 'rgba(32, 191, 169, 0.25)',
+                        border: '1px solid rgba(32, 191, 169, 0.4)',
+                        color: '#6ee7b7',
+                      }}
+                    >
+                      {courseActivities.length} hoạt động
+                    </span>
+                  </div>
+                  <p
+                    style={{
+                      margin: '3px 0 0',
+                      fontSize: '12.5px',
+                      color: '#94a3b8',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {activeCourse.name} {activeCourse.code ? `(${activeCourse.code})` : ''}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowActivityModal(false)}
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '10px',
+                  background: 'rgba(255, 255, 255, 0.06)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  color: '#cbd5e1',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '15px',
+                  fontWeight: 600,
+                  transition: 'all 0.2s ease',
+                }}
+                title="Đóng cửa sổ (Esc)"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div
+              style={{
+                padding: '1.25rem 1.5rem',
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.9rem',
+                flex: '1 1 auto',
+                minHeight: 0,
+              }}
+            >
+              {courseActivities.length === 0 ? (
+                <div
+                  style={{
+                    padding: '3.5rem 1rem',
+                    textAlign: 'center',
+                    color: '#94a3b8',
+                  }}
+                >
+                  <CalendarCheck size={40} style={{ margin: '0 auto 0.85rem', color: '#475569' }} />
+                  <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#f1f5f9' }}>
+                    Chưa có hoạt động hay hạn nộp nào
+                  </h4>
+                  <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#64748b' }}>
+                    Các bài tập và lịch thi từ Moodle của môn {activeCourse.name} sẽ tự động hiển thị ở đây.
+                  </p>
+                </div>
+              ) : (
+                courseActivities.map((act, idx) => {
+                  const date = new Date(act.timestamp);
+                  const isPast = act.timestamp < Date.now();
+                  const diffHours = Math.round((act.timestamp - Date.now()) / 3600000);
+                  const isUrgent = !isPast && diffHours <= 48;
+                  const isExam = act.type === 'exam' || act.type === 'quiz';
+                  const targetLmsUrl = act.url || lmsCourseUrl;
+
+                  return (
+                    <div
+                      key={`${act.id}-${idx}`}
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.035)',
+                        border: isUrgent
+                          ? '1px solid rgba(239, 68, 68, 0.4)'
+                          : '1px solid rgba(255, 255, 255, 0.08)',
+                        borderRadius: '14px',
+                        padding: '1.1rem 1.25rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.85rem',
+                        transition: 'all 0.2s ease',
+                      }}
+                    >
+                      {/* Top Row: Date Badge + Title & Meta + Status */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          justifyContent: 'space-between',
+                          gap: '0.75rem',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.85rem', minWidth: 0, flex: 1 }}>
+                          {/* Date Block */}
+                          <div
+                            style={{
+                              width: '44px',
+                              height: '44px',
+                              borderRadius: '10px',
+                              background: isUrgent
+                                ? 'rgba(239, 68, 68, 0.15)'
+                                : isExam
+                                ? 'rgba(249, 115, 22, 0.15)'
+                                : 'rgba(32, 191, 169, 0.15)',
+                              border: isUrgent
+                                ? '1px solid rgba(239, 68, 68, 0.35)'
+                                : isExam
+                                ? '1px solid rgba(249, 115, 22, 0.35)'
+                                : '1px solid rgba(32, 191, 169, 0.35)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: '15px',
+                                fontWeight: 800,
+                                color: isUrgent ? '#f87171' : isExam ? '#fb923c' : '#20bfa9',
+                                lineHeight: 1,
+                              }}
+                            >
+                              {date.getDate().toString().padStart(2, '0')}
+                            </span>
+                            <span style={{ fontSize: '9px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginTop: '2px' }}>
+                              T{date.getMonth() + 1}
+                            </span>
+                          </div>
+
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <h4
+                              style={{
+                                margin: 0,
+                                fontSize: '15px',
+                                fontWeight: 700,
+                                color: '#f8fafc',
+                              }}
+                            >
+                              {act.name}
+                            </h4>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginTop: '4px', flexWrap: 'wrap' }}>
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  padding: '1px 7px',
+                                  borderRadius: '4px',
+                                  background: isExam ? 'rgba(249, 115, 22, 0.15)' : 'rgba(56, 189, 248, 0.15)',
+                                  color: isExam ? '#fb923c' : '#38bdf8',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {isExam ? 'Kiểm tra / Thi' : 'Bài tập Moodle'}
+                              </span>
+
+                              {act.openTimestamp && act.closeTimestamp ? (
+                                <span style={{ fontSize: '11.5px', color: '#94a3b8', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                  <Clock size={12} />
+                                  {new Date(act.openTimestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} - {new Date(act.closeTimestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} · {new Date(act.closeTimestamp).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: '11.5px', color: '#94a3b8', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                  <Clock size={12} />
+                                  {date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} · {date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Status / Countdown Tag */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          {(() => {
+                            const now = Date.now();
+                            const closeTime = act.closeTimestamp || act.timestamp;
+                            const openTime = act.openTimestamp;
+
+                            if (closeTime < now) {
+                              return (
+                                <span
+                                  style={{
+                                    fontSize: '11px',
+                                    padding: '2px 8px',
+                                    borderRadius: '6px',
+                                    background: 'rgba(100, 116, 139, 0.2)',
+                                    color: '#94a3b8',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  Đã kết thúc
+                                </span>
+                              );
+                            }
+
+                            if (openTime && now < openTime) {
+                              const openDiffHours = Math.round((openTime - now) / 3600000);
+                              return (
+                                <span
+                                  style={{
+                                    fontSize: '11px',
+                                    padding: '2px 8px',
+                                    borderRadius: '6px',
+                                    background: 'rgba(56, 189, 248, 0.15)',
+                                    border: '1px solid rgba(56, 189, 248, 0.3)',
+                                    color: '#38bdf8',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  Mở sau {openDiffHours > 24 ? `${Math.ceil(openDiffHours / 24)} ngày` : `${openDiffHours}h`}
+                                </span>
+                              );
+                            }
+
+                            const remainingHours = Math.round((closeTime - now) / 3600000);
+                            const isVeryUrgent = remainingHours <= 48;
+
+                            return isVeryUrgent ? (
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  padding: '2px 8px',
+                                  borderRadius: '6px',
+                                  background: 'rgba(239, 68, 68, 0.2)',
+                                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                                  color: '#f87171',
+                                  fontWeight: 700,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                }}
+                              >
+                                <Flame size={12} />
+                                {remainingHours <= 0 ? 'Đang mở (sắp hết hạn)' : `Gấp (còn ${remainingHours}h)`}
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  padding: '2px 8px',
+                                  borderRadius: '6px',
+                                  background: 'rgba(32, 191, 169, 0.15)',
+                                  color: '#20bfa9',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                Còn {Math.ceil(remainingHours / 24)} ngày
+                              </span>
+                            );
+                          })()}
+                        </div>
+                      </div>
+
+                      {/* Action Bar with Exactly 2 Buttons: To Course and To LMS */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'flex-end',
+                          borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+                          paddingTop: '0.65rem',
+                          gap: '0.65rem',
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowActivityModal(false);
+                            notify(`Đang ở trong khóa học ${activeCourse.name}`);
+                          }}
+                          style={{
+                            padding: '6px 14px',
+                            borderRadius: '8px',
+                            background: 'rgba(124, 109, 242, 0.18)',
+                            border: '1px solid rgba(124, 109, 242, 0.35)',
+                            color: '#c4b5fd',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                          }}
+                        >
+                          <BookOpen size={13} />
+                          <span>Vào khóa học</span>
+                        </button>
+
+                        <a
+                          href={targetLmsUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            padding: '6px 14px',
+                            borderRadius: '8px',
+                            background: '#20bfa9',
+                            border: 'none',
+                            color: '#032c25',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            textDecoration: 'none',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <GraduationCap size={14} />
+                          <span>Mở LMS</span>
+                          <ExternalLink size={11} />
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div
+              style={{
+                padding: '0.9rem 1.5rem',
+                borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                background: 'rgba(0, 0, 0, 0.25)',
+                flexShrink: 0,
+              }}
+            >
+              <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                Tổng cộng {courseActivities.length} hoạt động môn học
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowActivityModal(false)}
+                style={{
+                  padding: '5px 14px',
+                  borderRadius: '7px',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  background: 'rgba(255, 255, 255, 0.06)',
+                  color: '#cbd5e1',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Đóng (Esc)
+              </button>
             </div>
           </div>
         </div>

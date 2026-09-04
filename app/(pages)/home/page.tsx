@@ -73,6 +73,84 @@ function getGreeting(hour: number) {
   return 'Chào buổi tối';
 }
 
+export type DeadlineItem = {
+  id: number | string;
+  name: string;
+  courseName: string;
+  timestamp: number;
+  openTimestamp?: number;
+  closeTimestamp?: number;
+  url?: string;
+  type?: 'homework' | 'exam' | 'quiz' | 'task';
+};
+
+export function mergeMoodleDeadlines(
+  rawDeadlines: Array<{ id: number; name: string; courseName: string; timestamp: number; url?: string }>
+): DeadlineItem[] {
+  const groupedMap = new Map<string, DeadlineItem>();
+
+  for (const d of rawDeadlines) {
+    const rawName = (d.name || '').trim();
+    let baseName = rawName;
+    let eventKind: 'open' | 'close' | 'general' = 'general';
+
+    // Detect "opens" or "mở" / "bắt đầu"
+    const opensMatch = /(?:\s+opens|\s+mở|\s+bắt đầu)$/i.exec(rawName);
+    if (opensMatch) {
+      baseName = rawName.slice(0, opensMatch.index).trim();
+      eventKind = 'open';
+    } else {
+      // Detect "closes", "is due", "due", "đóng", "hết hạn", "kết thúc", "hạn chót"
+      const closesMatch = /(?:\s+closes|\s+is due|\s+due|\s+đóng|\s+hết hạn|\s+kết thúc|\s+hạn chót)$/i.exec(rawName);
+      if (closesMatch) {
+        baseName = rawName.slice(0, closesMatch.index).trim();
+        eventKind = 'close';
+      }
+    }
+
+    const lowerBase = baseName.toLowerCase();
+    let type: 'homework' | 'exam' | 'quiz' | 'task' = 'homework';
+    if (lowerBase.includes('thi') || lowerBase.includes('exam') || lowerBase.includes('kiểm tra')) {
+      type = lowerBase.includes('trắc nghiệm') || lowerBase.includes('quiz') ? 'quiz' : 'exam';
+    }
+
+    const key = `${(d.courseName || '').toLowerCase()}::${lowerBase}`;
+    const existing = groupedMap.get(key);
+
+    if (existing) {
+      if (eventKind === 'open') {
+        existing.openTimestamp = d.timestamp;
+      } else if (eventKind === 'close') {
+        existing.closeTimestamp = d.timestamp;
+      }
+      if (d.url && !existing.url) {
+        existing.url = d.url;
+      }
+      existing.timestamp = existing.closeTimestamp || existing.openTimestamp || d.timestamp;
+    } else {
+      groupedMap.set(key, {
+        id: d.id,
+        name: baseName,
+        courseName: d.courseName,
+        openTimestamp: eventKind === 'open' ? d.timestamp : undefined,
+        closeTimestamp: eventKind === 'close' ? d.timestamp : undefined,
+        timestamp: d.timestamp,
+        url: d.url,
+        type,
+      });
+    }
+  }
+
+  const list = Array.from(groupedMap.values());
+  list.forEach(item => {
+    if (item.closeTimestamp && item.openTimestamp) {
+      item.timestamp = item.closeTimestamp;
+    }
+  });
+
+  return list;
+}
+
 /* ── Sidebar ─────────────────────────────────────────────── */
 
 function Sidebar({
@@ -282,7 +360,9 @@ function Dashboard({
 
   const deadlines = useMemo(() => {
     const now = Date.now();
-    return (moodle?.deadlines ?? []).filter(d => d.timestamp > now);
+    return mergeMoodleDeadlines(moodle?.deadlines ?? [])
+      .filter(d => (d.closeTimestamp ? d.closeTimestamp > now : d.timestamp > now))
+      .sort((a, b) => a.timestamp - b.timestamp);
   }, [moodle?.deadlines]);
 
   const courses: Course[] =
@@ -1047,8 +1127,6 @@ function Dashboard({
 
 /* ── Deadline ────────────────────────────────────────────── */
 
-type DeadlineItem = MoodleData['deadlines'][number];
-
 function Deadline({
   item,
   urgent,
@@ -1058,7 +1136,34 @@ function Deadline({
   urgent?: boolean;
   onOpen?: (item: DeadlineItem) => void;
 }) {
-  const date = new Date(item.timestamp);
+  const displayDate = new Date(item.closeTimestamp || item.timestamp);
+  const hasInterval = Boolean(item.openTimestamp && item.closeTimestamp);
+
+  let timeString = displayDate.toLocaleString('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  if (hasInterval && item.openTimestamp && item.closeTimestamp) {
+    const openD = new Date(item.openTimestamp);
+    const closeD = new Date(item.closeTimestamp);
+    const sameDay = openD.toDateString() === closeD.toDateString();
+
+    const openTimeStr = openD.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    const closeTimeStr = closeD.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    const dateStr = closeD.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+
+    if (sameDay) {
+      timeString = `${openTimeStr} - ${closeTimeStr} ${dateStr}`;
+    } else {
+      timeString = `${openTimeStr} ${openD.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })} - ${closeTimeStr} ${dateStr}`;
+    }
+  }
+
+  const isExam = item.type === 'exam' || item.type === 'quiz' || item.name.toLowerCase().includes('thi') || item.name.toLowerCase().includes('kiểm tra');
+
   return (
     <div
       className={onOpen ? 'deadline-item clickable' : 'deadline-item'}
@@ -1074,17 +1179,16 @@ function Deadline({
       }}
     >
       <time suppressHydrationWarning>
-        <b>{date.getDate().toString().padStart(2, '0')}</b>
-        <small>THG {date.getMonth() + 1}</small>
+        <b>{displayDate.getDate().toString().padStart(2, '0')}</b>
+        <small>THG {displayDate.getMonth() + 1}</small>
       </time>
       <span className={`deadline-icon ${urgent ? 'purple' : 'green'}`}>
-        {urgent ? '▤' : '✓'}
+        {urgent ? (isExam ? '✎' : '▤') : '✓'}
       </span>
       <section>
         <strong>{item.name}</strong>
         <p suppressHydrationWarning>
-          {item.courseName} ·{' '}
-          {date.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+          {item.courseName} · {timeString}
         </p>
       </section>
       {urgent && <em>Gấp</em>}
@@ -1103,18 +1207,33 @@ function HomeworkModal({
   onClose: () => void;
   onOpenCourse: () => void;
 }) {
-  const date = new Date(item.timestamp);
+  const date = new Date(item.closeTimestamp || item.timestamp);
   const matchingResources = resources.filter(resource =>
     resource.courseName?.toLowerCase() === item.courseName.toLowerCase(),
   );
 
+  let timeDisplay = date.toLocaleString('vi-VN', { dateStyle: 'full', timeStyle: 'short' });
+  if (item.openTimestamp && item.closeTimestamp) {
+    const openD = new Date(item.openTimestamp);
+    const closeD = new Date(item.closeTimestamp);
+    const sameDay = openD.toDateString() === closeD.toDateString();
+
+    if (sameDay) {
+      timeDisplay = `${openD.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} - ${closeD.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}, ${closeD.toLocaleDateString('vi-VN', { dateStyle: 'full' })}`;
+    } else {
+      timeDisplay = `${openD.toLocaleString('vi-VN', { dateStyle: 'medium', timeStyle: 'short' })} — ${closeD.toLocaleString('vi-VN', { dateStyle: 'medium', timeStyle: 'short' })}`;
+    }
+  }
+
+  const isExam = item.type === 'exam' || item.type === 'quiz' || item.name.toLowerCase().includes('thi') || item.name.toLowerCase().includes('kiểm tra');
+
   return (
-    <Modal title="Chi tiết bài tập" onClose={onClose}>
+    <Modal title={isExam ? 'Chi tiết bài kiểm tra / thi' : 'Chi tiết bài tập'} onClose={onClose}>
       <div className="homework-modal">
         <div className="homework-heading">
-          <span className="deadline-icon purple">▤</span>
+          <span className="deadline-icon purple">{isExam ? '✎' : '▤'}</span>
           <div>
-            <p className="eyebrow">BÀI TẬP MOODLE</p>
+            <p className="eyebrow">{isExam ? 'BÀI THI / KIỂM TRA MOODLE' : 'BÀI TẬP MOODLE'}</p>
             {item.url ? (
               <a className="homework-title-link" href={item.url} target="_blank" rel="noreferrer">
                 {item.name} <span aria-hidden="true">↗</span>
@@ -1126,9 +1245,9 @@ function HomeworkModal({
         </div>
         <div className="homework-details">
           <div><span>Khóa học</span><strong>{item.courseName}</strong></div>
-          <div><span>Hạn nộp</span><strong>{date.toLocaleString('vi-VN', { dateStyle: 'full', timeStyle: 'short' })}</strong></div>
+          <div><span>{item.openTimestamp && item.closeTimestamp ? 'Thời gian diễn ra' : 'Hạn nộp'}</span><strong>{timeDisplay}</strong></div>
         </div>
-        <div className="homework-status"><i /> Chưa có trạng thái nộp bài từ Moodle</div>
+        <div className="homework-status"><i /> Hoạt động đồng bộ từ Moodle LMS</div>
         {matchingResources.length > 0 && (
           <div className="homework-resources">
             <span>Tài liệu liên quan</span>
@@ -1139,7 +1258,28 @@ function HomeworkModal({
         )}
         <div className="homework-actions">
           <button onClick={onClose}>Đóng</button>
-          <button className="primary-action" onClick={onOpenCourse}>Mở khóa học <span>→</span></button>
+          {item.url && (
+            <a
+              href={item.url}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                padding: '8px 14px',
+                borderRadius: '8px',
+                background: 'rgba(255, 255, 255, 0.08)',
+                color: '#fff',
+                textDecoration: 'none',
+                fontSize: '13px',
+                fontWeight: 500,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              Mở LMS ↗
+            </a>
+          )}
+          <button className="primary-action" onClick={onOpenCourse}>Vào khóa học <span>→</span></button>
         </div>
       </div>
     </Modal>
@@ -2055,6 +2195,17 @@ function HomeContent() {
     );
   }, [user]);
 
+  const mergedDeadlines = useMemo(() => {
+    return mergeMoodleDeadlines(moodle?.deadlines ?? []);
+  }, [moodle?.deadlines]);
+
+  const activeDeadlines = useMemo(() => {
+    const now = Date.now();
+    return mergedDeadlines
+      .filter(d => (d.closeTimestamp ? d.closeTimestamp > now : d.timestamp > now))
+      .sort((a, b) => a.timestamp - b.timestamp);
+  }, [mergedDeadlines]);
+
   return (
     <main className="app-shell">
       <Sidebar
@@ -2124,7 +2275,6 @@ function HomeContent() {
                 <button onClick={() => setNotifications(false)}>×</button>
               </header>
               {(() => {
-                const activeDeadlines = (moodle?.deadlines ?? []).filter(d => d.timestamp > Date.now());
                 if (activeDeadlines.length === 0) {
                   return (
                     <div style={{ padding: '0.75rem 1rem', fontSize: '13px', color: '#94a3b8' }}>
@@ -2133,14 +2283,19 @@ function HomeContent() {
                   );
                 }
                 return activeDeadlines.slice(0, 4).map(d => {
-                  const date = new Date(d.timestamp);
+                  const date = new Date(d.closeTimestamp || d.timestamp);
+                  const isExam = d.type === 'exam' || d.type === 'quiz' || d.name.toLowerCase().includes('thi') || d.name.toLowerCase().includes('kiểm tra');
+                  const timeText = d.openTimestamp && d.closeTimestamp
+                    ? `${new Date(d.openTimestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} - ${new Date(d.closeTimestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} ${date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}`
+                    : `hạn ${date.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
+
                   return (
-                    <div key={d.id}>
-                      <span className="purple">▤</span>
+                    <div key={d.id} style={{ cursor: 'pointer' }} onClick={() => { setNotifications(false); openHomework(d); }}>
+                      <span className="purple">{isExam ? '✎' : '▤'}</span>
                       <section>
                         <b>{d.name}</b>
                         <small>
-                          {d.courseName} · hạn {date.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                          {d.courseName} · {timeText}
                         </small>
                       </section>
                     </div>
@@ -2220,10 +2375,12 @@ function HomeContent() {
       )}
 
       {calendar && (
-        <Modal title="Lịch học sắp tới" onClose={() => setCalendar(false)}>
+        <Modal title="Lịch học & Deadline sắp tới" onClose={() => setCalendar(false)}>
           <div className="calendar-list">
-            {(moodle?.deadlines ?? []).length ? (
-              (moodle?.deadlines ?? []).map(d => <Deadline key={d.id} item={d} onOpen={openHomework} />)
+            {mergedDeadlines.length ? (
+              mergedDeadlines
+                .sort((a, b) => a.timestamp - b.timestamp)
+                .map(d => <Deadline key={d.id} item={d} onOpen={openHomework} />)
             ) : (
               <div className="empty-state" style={{ padding: '2rem 0' }}>
                 Không có lịch học hoặc deadline nào từ Moodle.
