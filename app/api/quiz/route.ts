@@ -5,6 +5,7 @@ import { courses, documents } from '@/db/schema';
 import { eq, ilike, or } from 'drizzle-orm';
 import { parseDocumentFromUrl } from '@/lib/document-parser';
 import { retrieveRelevantChunks, formatChunksForPrompt } from '@/lib/rag';
+import { getLatestQuizAnalysis } from '@/lib/learning-artifacts';
 
 interface SourceItem {
   name: string;
@@ -29,11 +30,15 @@ export async function POST(request: Request) {
       course?: string;
       courseCode?: string;
       courseId?: string | number;
+      userId?: number;
       sourceNames?: string[];
       sources?: SourceItem[];
       count?: number;
       difficulty?: 'easy' | 'normal' | 'hard';
       questionType?: 'multiple_choice' | 'true_false' | 'multiple_select' | 'mixed';
+      generatorMode?: 'comprehensive' | 'targeted';
+      focusWeakAreas?: boolean;
+      weakTopics?: string[];
       allowExternalSource?: boolean;
       model?: string;
     };
@@ -192,11 +197,39 @@ export async function POST(request: Request) {
       ? 'Được phép đưa thêm các câu hỏi tình huống thực tế ngành, câu hỏi ứng dụng hiện đại và câu hỏi mở rộng tư duy sáng tạo (out-of-the-box).'
       : 'Câu hỏi bám sát tuyệt đối tài liệu môn học được cung cấp.';
 
+    // Adaptive Learning Remediation Mode
+    const generatorMode = body.generatorMode || (body.focusWeakAreas ? 'targeted' : 'comprehensive');
+    let effectiveWeakTopics: string[] = body.weakTopics || [];
+
+    if (generatorMode === 'targeted' && effectiveWeakTopics.length === 0) {
+      try {
+        const courseIdNum = typeof body.courseId === 'number' ? body.courseId : Number(body.courseId);
+        const latestAnalysis = await getLatestQuizAnalysis({
+          moodleCourseId: !isNaN(courseIdNum) ? courseIdNum : undefined,
+          userId: body.userId ? Number(body.userId) : undefined,
+        });
+        if (latestAnalysis?.weakTopics?.length) {
+          effectiveWeakTopics = latestAnalysis.weakTopics;
+        }
+      } catch (err) {
+        console.warn('Could not retrieve weak topics from learning_artifacts:', err);
+      }
+    }
+
+    let adaptiveSection = '';
+    if (generatorMode === 'targeted' && effectiveWeakTopics.length > 0) {
+      adaptiveSection = `\nĐẶC BIỆT - CHẾ ĐỘ HỌC TẬP THÍCH ỨNG (ADAPTIVE REMEDIATION):
+Sinh viên này đang bị hổng kiến thức hoặc liên tục làm sai ở các chủ đề sau:
+${effectiveWeakTopics.map((t, idx) => `  ${idx + 1}. ${t}`).join('\n')}
+YÊU CẦU BẮT BUỘC: Hãy tập trung 100% câu hỏi xoáy sâu vào các chủ đề trên! Tăng cường các câu hỏi tình huống thực tế, câu hỏi phân biệt bản chất dễ nhầm lẫn để giúp sinh viên rà soát và khắc phục triệt để lỗ hổng.\n`;
+    }
+
     const prompt = `${contextSection}YÊU CẦU SOẠN ĐỀ TRẮC NGHIỆM:
 Hãy tạo chính xác ${count} câu hỏi trắc nghiệm tiếng Việt theo chủ đề: "${topic}".
 ${difficultyDesc}
 ${typeDesc}
 ${externalRule}
+${adaptiveSection}
 
 QUY TẮC BẮT BUỘC:
 1. Đối với "type": "multiple_choice" (1 đáp án): "choices" có 4 phương án, "answer": số nguyên 0..3.
@@ -315,6 +348,8 @@ Không bao gồm markdown hay văn bản ngoài JSON.`;
             count: normalized.length,
             difficulty,
             questionType,
+            generatorMode,
+            weakTopics: effectiveWeakTopics,
             mode: 'ai',
           });
         }

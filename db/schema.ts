@@ -1,4 +1,4 @@
-import { integer, pgTable, real, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { integer, jsonb, pgTable, real, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const users = pgTable('users', {
@@ -48,6 +48,17 @@ export const gradebooks = pgTable('gradebooks', {
   createdAt: timestamp('created_at', { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const learningArtifacts = pgTable('learning_artifacts', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  userId: integer('user_id')
+    .notNull()
+    .references(() => users.moodleUserId, { onDelete: 'cascade' }),
+  moodleCourseId: integer('moodle_course_id').notNull(),
+  artifactType: varchar('artifact_type', { length: 50 }).notNull(),
+  contentData: jsonb('content_data').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`),
+});
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Course = typeof courses.$inferSelect;
@@ -58,3 +69,6 @@ export type QuizAttempt = typeof quizAttempts.$inferSelect;
 export type NewQuizAttempt = typeof quizAttempts.$inferInsert;
 export type Gradebook = typeof gradebooks.$inferSelect;
 export type NewGradebook = typeof gradebooks.$inferInsert;
+export type LearningArtifact = typeof learningArtifacts.$inferSelect;
+export type NewLearningArtifact = typeof learningArtifacts.$inferInsert;
+

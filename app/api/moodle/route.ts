@@ -173,6 +173,10 @@ export async function GET(request: Request) {
       courseCode: string;
       name: string;
       itemModule: string;
+      quizId?: number;
+      cmid?: number;
+      attemptId?: number;
+      studentUserId?: number;
       score: number;
       maxScore: number;
       minScore: number;
@@ -203,19 +207,22 @@ export async function GET(request: Request) {
           const rawScore = Number(item.graderaw);
           if (isNaN(rawScore)) continue;
 
+          // Round grade to at most one decimal place (e.g. 6.16667 -> 6.2)
+          const roundedScore = Math.round(rawScore * 10) / 10;
+
           let maxScore = Number(item.grademax ?? 10);
           const minScore = Number(item.grademin ?? 0);
           // If grade is on standard 10-point scale but Moodle grademax was left at 100
-          if (maxScore === 100 && rawScore <= 10) {
+          if (maxScore === 100 && roundedScore <= 10) {
             maxScore = 10;
           }
 
           const passGrade = item.gradepass && item.gradepass > 0 ? item.gradepass : (maxScore / 2);
-          const passed = rawScore >= passGrade;
+          const passed = roundedScore >= passGrade;
 
           let percentage = '';
           if (maxScore > 0) {
-            percentage = `${Math.round((rawScore / maxScore) * 100)}%`;
+            percentage = `${Math.round((roundedScore / maxScore) * 100)}%`;
           }
 
           const timestamp = (item.gradedategraded || item.gradedatesubmitted || 0) * 1000;
@@ -240,7 +247,10 @@ export async function GET(request: Request) {
             courseCode: course.shortname,
             name: item.itemname,
             itemModule: item.itemmodule || 'manual',
-            score: rawScore,
+            quizId: item.iteminstance ? Number(item.iteminstance) : undefined,
+            cmid: item.cmid ? Number(item.cmid) : undefined,
+            studentUserId: ug.userid ? Number(ug.userid) : site.userid,
+            score: roundedScore,
             maxScore,
             minScore,
             percentage,
@@ -253,8 +263,55 @@ export async function GET(request: Request) {
       }
     });
 
-    examResults.sort((a, b) => (b.gradedAt || 0) - (a.gradedAt || 0));
-    const latestResult = examResults[0] || null;
+    // Fetch attemptId for quiz items in parallel
+    const quizFetchList: Array<{ quizId: number; userId: number; itemRef: (typeof examResults)[number] }> = [];
+    examResults.forEach(resItem => {
+      if (resItem.itemModule === 'quiz' && resItem.quizId) {
+        quizFetchList.push({
+          quizId: resItem.quizId,
+          userId: resItem.studentUserId || site.userid,
+          itemRef: resItem,
+        });
+      }
+    });
+
+    if (quizFetchList.length > 0) {
+      await Promise.allSettled(
+        quizFetchList.map(async ({ quizId, userId, itemRef }) => {
+          try {
+            const attData = await call<{
+              attempts?: Array<{ id: number; state: string; timemodified: number }>;
+            }>('mod_quiz_get_user_attempts', {
+              quizid: String(quizId),
+              userid: String(userId),
+              status: 'all',
+              includepreviews: '1',
+            });
+            if (attData?.attempts && attData.attempts.length > 0) {
+              const sorted = [...attData.attempts].sort((a, b) => (b.timemodified || 0) - (a.timemodified || 0));
+              const finished = sorted.find(a => a.state === 'finished') || sorted[0];
+              if (finished) {
+                itemRef.attemptId = finished.id;
+              }
+            }
+          } catch {
+            // Ignore attempt fetch error
+          }
+        })
+      );
+    }
+
+    // Deduplicate by courseId + exam name/id to prevent duplicate cards/records
+    const seenExamKeys = new Set<string>();
+    const deduplicatedExamResults = examResults.filter(r => {
+      const key = `${r.courseId}-${r.name || r.id}`;
+      if (seenExamKeys.has(key)) return false;
+      seenExamKeys.add(key);
+      return true;
+    });
+
+    deduplicatedExamResults.sort((a, b) => (b.gradedAt || 0) - (a.gradedAt || 0));
+    const latestResult = deduplicatedExamResults[0] || null;
 
     const mappedCourses = courses.map((course, idx) => {
       let role = 'student';
@@ -302,7 +359,7 @@ export async function GET(request: Request) {
       courses: mappedCourses,
       deadlines,
       resources,
-      examResults,
+      examResults: deduplicatedExamResults,
       latestResult,
       syncedAt: new Date().toISOString(),
       moodleUrl: MOODLE_URL ? MOODLE_URL.replace(/\/$/, '') : 'http://moodle.test',

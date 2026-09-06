@@ -11,6 +11,7 @@ import {
   HelpCircle,
   Zap,
   BookOpen,
+  ListChecks,
   Copy,
   Check,
   Trash2,
@@ -62,12 +63,26 @@ import type {
   MoodleData,
   MoodleResource,
   MoodleUser,
+  QuizAnalysisData,
   StudyToolResponse,
   TutorResponse,
 } from '@/app/types';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
 import { InteractiveMindmap } from '@/app/components/InteractiveMindmap';
 import { QuizComponent } from '@/app/components/QuizComponent';
+import { QuizAnalysisModal } from '@/app/components/QuizAnalysisModal';
+import {
+  getStoredAnalysis,
+  saveStoredAnalysis,
+  getAllStoredAttemptIds,
+} from '@/app/lib/quiz-client-cache';
+import {
+  resolveGradeRoute,
+  buildGradePrompt,
+  formatGrade,
+  GRADE_RESPONSE_STRATEGIES,
+  type GradeResponseStrategy,
+} from '@/app/lib/grade-router';
 import { SlidePresentation } from '@/app/components/SlidePresentation';
 import type { SlideDeckData } from '@/lib/pptx-export';
 import { TeacherPortal } from '@/app/components/teacher/TeacherPortal';
@@ -813,7 +828,12 @@ function CourseDetailContent() {
       },
     ]);
     setArtifactsMap({});
-    setInput('');
+    if (!initialIntent || !draftMode) {
+      setInput('');
+    } else {
+      setInput(initialIntent);
+      setHideStrategyBar(false);
+    }
   }, [activeCourse.id, activeCourse.code, activeCourse.name, courseSources.length]);
 
   const [input, setInput] = useState(
@@ -941,15 +961,178 @@ function CourseDetailContent() {
     return list.sort((a, b) => a.timestamp - b.timestamp);
   }, [moodle?.deadlines, activeCourse.name, activeCourse.code]);
 
-  // Handler to ask AI about an exam result without auto-sending
-  const handleAskAiAboutGrade = (res: ExamResult) => {
-    const prompt = res.feedback
-      ? `Chào Gia sư AI, giảng viên vừa chấm bài thi "${res.name}" môn ${res.courseName} (${res.score}/${res.maxScore}đ) và nhận xét: "${res.feedback}". Hãy hướng dẫn chi tiết phương hướng ôn tập và giải quyết đúng những phần này!`
-      : `Hãy hướng dẫn ôn tập nội dung bài thi "${res.name}" môn ${res.courseName} (Điểm: ${res.score}/${res.maxScore})`;
-    setInput(prompt);
-    setTool('Chat');
-    setShowGradeHistory(false);
-    notify(`Đã đưa bài "${res.name}" vào ô hỏi AI`);
+  // Quiz Analysis state & handler
+  const [analysisModalOpen, setAnalysisModalOpen] = useState(false);
+  const [currentAnalysis, setCurrentAnalysis] = useState<QuizAnalysisData | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [selectedExamResult, setSelectedExamResult] = useState<ExamResult | null>(null);
+  const [analyzedAttemptIds, setAnalyzedAttemptIds] = useState<Set<number>>(new Set());
+  const [quizInitialMode, setQuizInitialMode] = useState<'comprehensive' | 'targeted'>('comprehensive');
+  const [quizInitialTopics, setQuizInitialTopics] = useState<string[]>([]);
+  const [selectedStrategies, setSelectedStrategies] = useState<GradeResponseStrategy[]>(['roadmap']);
+  const [hideStrategyBar, setHideStrategyBar] = useState<boolean>(false);
+
+  // Auto-restore selectedExamResult when navigating via URL with prompt intent
+  useEffect(() => {
+    if (!selectedExamResult && courseExamResults.length > 0 && (input.includes('Chào Gia sư AI!') || input.includes('bài kiểm tra'))) {
+      const matched = courseExamResults.find(r => input.includes(`"${r.name}"`) || input.includes(r.name));
+      if (matched) {
+        setSelectedExamResult(matched);
+      }
+    }
+  }, [courseExamResults, input, selectedExamResult]);
+
+  // Check saved analyses for this course (localStorage first, then sync with database)
+  useEffect(() => {
+    // 1. Instant local check
+    const localIds = getAllStoredAttemptIds();
+    if (localIds.length > 0) {
+      setAnalyzedAttemptIds(new Set(localIds));
+    }
+
+    // 2. Sync with database
+    if (activeCourse?.id) {
+      fetch(`/api/quiz/analysis?courseId=${activeCourse.id}`)
+        .then(r => r.json() as Promise<{ analyses?: QuizAnalysisData[] }>)
+        .then(data => {
+          if (data?.analyses?.length) {
+            setAnalyzedAttemptIds(prev => {
+              const next = new Set(prev);
+              data.analyses!.forEach(a => {
+                if (a.attemptId) {
+                  next.add(Number(a.attemptId));
+                  saveStoredAnalysis(a.attemptId, a);
+                }
+              });
+              return next;
+            });
+          }
+        })
+        .catch(() => {});
+    }
+  }, [activeCourse?.id]);
+
+  // Sync tool and targeted remediation mode from searchParams
+  useEffect(() => {
+    const qTool = searchParams.get('tool');
+    const qMode = searchParams.get('mode');
+    const qTopics = searchParams.get('topics');
+    if (qTool === 'Quiz' || qTool === 'Trắc nghiệm') {
+      setTool('Trắc nghiệm');
+    }
+    if (qMode === 'targeted') {
+      setQuizInitialMode('targeted');
+    }
+    if (qTopics) {
+      const decodedTopics = qTopics
+        .split(',')
+        .map(t => decodeURIComponent(t.trim()))
+        .filter(Boolean);
+      if (decodedTopics.length > 0) {
+        setQuizInitialTopics(decodedTopics);
+      }
+    }
+  }, [searchParams]);
+
+  // Handler to ask AI about an exam result (with 2x2 context matrix routing)
+  const handleAskAiAboutGrade = async (res: ExamResult, forceReanalyze = false) => {
+    setSelectedExamResult(res);
+
+    const isAnalyzed = !!res.attemptId && analyzedAttemptIds.has(Number(res.attemptId));
+    const route = resolveGradeRoute(res, isAnalyzed);
+
+    // 1. Chat Action: Case 3 (Khuếch đại lời phê) or Case 4 (Điểm mù - Phỏng vấn viên)
+    // Directly place prompt into input of course chat
+    if (route.actionType === 'chat') {
+      setShowGradeHistory(false);
+      setHideStrategyBar(false);
+      const defaultSt = route.defaultStrategy || 'roadmap';
+      setSelectedStrategies([defaultSt]);
+      const prompt =
+        route.prompt ||
+        buildGradePrompt(
+          res,
+          [defaultSt],
+          answerStyle,
+          res.attemptId ? getStoredAnalysis(res.attemptId) : null
+        );
+      setTool('Chat');
+      setInput(prompt);
+      notify('Đã nạp câu lệnh vào ô chat. Bạn có thể kiểm tra và chỉnh sửa trước khi gửi.');
+      return;
+    }
+
+    // 2. Modal Action: Case 1 (Toàn tri) or Case 2 (Phân tích kỹ thuật)
+    const attemptIdToUse = res.attemptId;
+    if (attemptIdToUse) {
+      setShowGradeHistory(false);
+
+      // Instant re-open: if already loaded in component state
+      if (currentAnalysis && Number(currentAnalysis.attemptId) === Number(attemptIdToUse) && !forceReanalyze) {
+        setAnalysisModalOpen(true);
+        return;
+      }
+
+      // Client-side localStorage cache-first: 0 network calls, 0 token consumption, instant modal open
+      if (!forceReanalyze) {
+        const localCached = getStoredAnalysis(attemptIdToUse);
+        if (localCached) {
+          setCurrentAnalysis(localCached);
+          setAnalysisModalOpen(true);
+          return;
+        }
+      }
+
+      setAnalysisModalOpen(true);
+      setAnalysisLoading(true);
+      setAnalysisError(null);
+
+      try {
+        // Database cache-first: fetch existing saved analysis before spending AI credits
+        if (!forceReanalyze) {
+          const checkRes = await fetch(`/api/quiz/analysis?attemptId=${attemptIdToUse}`);
+          const checkData = (await checkRes.json()) as any;
+          if (checkData?.analysis) {
+            setCurrentAnalysis({ ...checkData.analysis, cached: true });
+            saveStoredAnalysis(attemptIdToUse, checkData.analysis);
+            setAnalyzedAttemptIds(prev => new Set(prev).add(Number(attemptIdToUse)));
+            setAnalysisLoading(false);
+            return;
+          }
+        }
+
+        // Trigger analysis with 2x2 matrix context flags
+        const apiRes = await fetch('/api/quiz/analysis', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            attemptId: attemptIdToUse,
+            courseId: res.courseId,
+            courseCode: res.courseCode,
+            courseName: res.courseName,
+            quizName: res.name,
+            userId: user?.id,
+            feedback: res.feedback,
+            has_details: route.hasDetails,
+            has_feedback: route.hasFeedback,
+            forceReanalyze,
+          }),
+        });
+        const data = (await apiRes.json()) as any;
+        if (!apiRes.ok || data.error) {
+          throw new Error(data.error || 'Không thể chẩn đoán bài thi lúc này.');
+        }
+        setCurrentAnalysis(data.analysis);
+        saveStoredAnalysis(attemptIdToUse, data.analysis);
+        setAnalyzedAttemptIds(prev => new Set(prev).add(Number(attemptIdToUse)));
+      } catch (err) {
+        setAnalysisError(err instanceof Error ? err.message : 'Có lỗi khi phân tích bài thi.');
+      } finally {
+        setAnalysisLoading(false);
+      }
+      return;
+    }
   };
 
   // Close drawers on Escape key
@@ -1122,8 +1305,12 @@ function CourseDetailContent() {
       if (!draftMode) {
         // Auto-send only when NOT in draft mode
         void ask(initialIntent);
+      } else {
+        // In draft mode, ensure input has the intent, switch to Chat, and do NOT auto-send!
+        setInput(initialIntent);
+        setTool('Chat');
+        notify('Đã nạp câu lệnh vào ô chat. Bạn có thể kiểm tra và chỉnh sửa trước khi gửi.');
       }
-      // In draft mode the intent is already in the input state — user sends manually
     }
   }, [initialIntent, activeCourse.code]);
 
@@ -2096,6 +2283,101 @@ function CourseDetailContent() {
                   </div>
 
                   <div className="chat-compose">
+                    {/* Strategy Multi-Select Quick Chooser Bar */}
+                    {!hideStrategyBar && (selectedExamResult || input.includes('kết quả bài') || input.includes('Chào Gia sư AI') || input.includes('bài kiểm tra')) && (
+                      <div className="grade-strategy-toolbar">
+                        <div className="grade-strategy-label-wrap">
+                          <span className="grade-strategy-title">
+                            <Sparkles size={13} style={{ color: '#a855f7' }} />
+                            Phương pháp phản hồi:
+                          </span>
+                          <span className="grade-strategy-count-pill" title="Số lượng phương pháp đang kết hợp cùng lúc">
+                            {selectedStrategies.length}/4
+                          </span>
+                          <span className="grade-strategy-hint">
+                            (chọn nhiều mục)
+                          </span>
+                        </div>
+
+                        <div className="grade-strategy-chips-group">
+                          {GRADE_RESPONSE_STRATEGIES.map(st => {
+                            const isSelected = selectedStrategies.includes(st.id);
+                            return (
+                              <button
+                                key={st.id}
+                                type="button"
+                                onClick={() => {
+                                  let next: GradeResponseStrategy[];
+                                  if (isSelected) {
+                                    if (selectedStrategies.length > 1) {
+                                      next = selectedStrategies.filter(id => id !== st.id);
+                                    } else {
+                                      notify('Vui lòng chọn ít nhất 1 phương pháp phản hồi');
+                                      return;
+                                    }
+                                  } else {
+                                    next = [...selectedStrategies, st.id];
+                                  }
+                                  setSelectedStrategies(next);
+
+                                  const targetExam =
+                                    selectedExamResult ||
+                                    courseExamResults.find(
+                                      r => input.includes(`"${r.name}"`) || input.includes(r.name)
+                                    ) ||
+                                    null;
+
+                                  if (targetExam) {
+                                    const newPrompt = buildGradePrompt(
+                                      targetExam,
+                                      next,
+                                      answerStyle,
+                                      currentAnalysis ||
+                                        (targetExam.attemptId
+                                          ? getStoredAnalysis(targetExam.attemptId)
+                                          : null)
+                                    );
+                                    setInput(newPrompt);
+                                    notify(
+                                      !isSelected
+                                        ? `Đã thêm phương pháp: ${st.label}`
+                                        : `Đã bỏ phương pháp: ${st.label}`
+                                    );
+                                  } else {
+                                    notify(
+                                      !isSelected
+                                        ? `Đã chọn: ${st.label}`
+                                        : `Đã bỏ: ${st.label}`
+                                    );
+                                  }
+                                }}
+                                className={`grade-strategy-chip-btn ${isSelected ? 'active' : ''}`}
+                                title={st.description}
+                              >
+                                {st.id === 'roadmap' && <ListChecks size={13} />}
+                                {st.id === 'deep_dive' && <BookOpen size={13} />}
+                                {st.id === 'socratic' && <HelpCircle size={13} />}
+                                {st.id === 'practice' && <Sparkles size={13} />}
+                                <span>{st.label}</span>
+                                {isSelected && (
+                                  <span className="grade-strategy-chip-check">✓</span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setHideStrategyBar(true)}
+                          className="grade-strategy-close-btn"
+                          title="Đóng thanh phương pháp phản hồi"
+                          aria-label="Đóng thanh phương pháp"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    )}
                     <textarea
                       value={input}
                       onChange={e => setInput(e.target.value)}
@@ -2192,6 +2474,8 @@ function CourseDetailContent() {
                       selectedSources={sources.filter((_, i) => checked[i])}
                       allowExternalSource={allowExternalSource}
                       selectedModel={selectedModel}
+                      initialMode={quizInitialMode}
+                      initialWeakTopics={quizInitialTopics}
                       notify={notify}
                     />
                   ) : (
@@ -2457,9 +2741,28 @@ function CourseDetailContent() {
                             : 'LMS'}
                         </span>
                         <span className={`result-status-tag ${res.passed ? 'pass' : 'fail'}`}>
-                          {res.passed ? 'Đạt' : 'Cần cải thiện'} (
-                          {res.percentage || `${Math.round((res.score / res.maxScore) * 100)}%`})
+                          {res.passed ? 'Đạt' : 'Cần cải thiện'}
                         </span>
+                        {(() => {
+                          const isAnalyzed = !!res.attemptId && analyzedAttemptIds.has(Number(res.attemptId));
+                          const route = resolveGradeRoute(res, isAnalyzed);
+                          return (
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                padding: '2px 8px',
+                                borderRadius: '7px',
+                                background: `${route.badgeColor}22`,
+                                color: route.badgeColor,
+                                border: `1px solid ${route.badgeColor}55`,
+                                fontWeight: 600,
+                              }}
+                              title={route.buttonTooltip}
+                            >
+                              {route.badgeText}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
 
@@ -2475,9 +2778,9 @@ function CourseDetailContent() {
                               color: res.passed ? '#22c55e' : '#ef4444',
                             }}
                           >
-                            {res.score}
+                            {formatGrade(res.score)}
                           </span>
-                          <span style={{ fontSize: '13px', color: '#64748b' }}>/{res.maxScore}</span>
+                          <span style={{ fontSize: '13px', color: '#64748b' }}>/{formatGrade(res.maxScore)}</span>
                         </div>
                       </div>
 
@@ -2574,16 +2877,30 @@ function CourseDetailContent() {
                           <ExternalLink size={11} />
                         </a>
                       )}
-                      <button
-                        type="button"
-                        className="result-ai-btn"
-                        style={{ fontSize: '11.5px', padding: '0.4rem 0.95rem', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-                        onClick={() => handleAskAiAboutGrade(res)}
-                        title="Hướng dẫn ôn tập phần kiến thức này"
-                      >
-                        <Sparkles size={13} />
-                        <span>Hướng dẫn ôn tập</span>
-                      </button>
+                      {(() => {
+                        const isAnalyzed = !!res.attemptId && analyzedAttemptIds.has(Number(res.attemptId));
+                        const route = resolveGradeRoute(res, isAnalyzed);
+                        return (
+                          <button
+                            type="button"
+                            className="result-ai-btn"
+                            style={{
+                              fontSize: '11.5px',
+                              padding: '0.4rem 0.95rem',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px',
+                              background: route.buttonGradient,
+                              borderColor: route.borderColor,
+                            }}
+                            onClick={() => handleAskAiAboutGrade(res)}
+                            title={route.buttonTooltip}
+                          >
+                            <Sparkles size={13} />
+                            <span>{route.buttonLabel}</span>
+                          </button>
+                        );
+                      })()}
                     </div>
                   </div>
                 ))
@@ -3466,6 +3783,41 @@ function CourseDetailContent() {
           </div>
         </div>
       )}
+
+      {/* Quiz Analysis Diagnosis Modal */}
+      <QuizAnalysisModal
+        isOpen={analysisModalOpen}
+        onClose={() => setAnalysisModalOpen(false)}
+        analysis={currentAnalysis}
+        loading={analysisLoading}
+        error={analysisError}
+        onRetry={() => selectedExamResult && handleAskAiAboutGrade(selectedExamResult, false)}
+        onReanalyze={() => selectedExamResult && handleAskAiAboutGrade(selectedExamResult, true)}
+        onStartRemediation={topics => {
+          setAnalysisModalOpen(false);
+          setQuizInitialMode('targeted');
+          setQuizInitialTopics(topics);
+          setTool('Trắc nghiệm');
+          notify(`Đã chuyển sang Lò ấp trắc nghiệm: Khắc phục ${topics.length} điểm mù`);
+        }}
+        onAskTutor={analysisData => {
+          setAnalysisModalOpen(false);
+          if (selectedExamResult) {
+            setSelectedStrategies(['roadmap']);
+            setHideStrategyBar(false);
+            const prompt = buildGradePrompt(
+              selectedExamResult,
+              ['roadmap'],
+              answerStyle,
+              analysisData || currentAnalysis
+            );
+            setShowGradeHistory(false);
+            setTool('Chat');
+            setInput(prompt);
+            notify('Đã nạp câu lệnh vào ô chat. Bạn có thể kiểm tra và chỉnh sửa trước khi gửi.');
+          }
+        }}
+      />
     </main>
   );
 }

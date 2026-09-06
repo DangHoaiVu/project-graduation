@@ -29,7 +29,13 @@ import {
   inspirationalQuotes,
   nav,
 } from '@/app/mock-data';
-import { CourseCard, TeacherPortal } from '@/app/components';
+import { CourseCard, TeacherPortal, QuizAnalysisModal } from '@/app/components';
+import {
+  getStoredAnalysis,
+  saveStoredAnalysis,
+  getAllStoredAttemptIds,
+} from '@/app/lib/quiz-client-cache';
+import { resolveGradeRoute, formatGrade, buildGradePrompt } from '@/app/lib/grade-router';
 import type {
   Course,
   ErrorResponse,
@@ -38,6 +44,7 @@ import type {
   LibraryResponse,
   MoodleData,
   MoodleUser,
+  QuizAnalysisData,
   QuizQuestion,
   QuizResponse,
   UploadResponse,
@@ -409,6 +416,132 @@ function Dashboard({
     );
   }, [allExamResults, gradeModalFilter]);
 
+  // Quiz Analysis state & handler
+  const [analysisModalOpen, setAnalysisModalOpen] = useState(false);
+  const [currentAnalysis, setCurrentAnalysis] = useState<QuizAnalysisData | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [selectedExamResult, setSelectedExamResult] = useState<ExamResult | null>(null);
+  const [analyzedAttemptIds, setAnalyzedAttemptIds] = useState<Set<number>>(new Set());
+
+  // Check saved analyses (localStorage first, then sync with database)
+  useEffect(() => {
+    // 1. Instant local check
+    const localIds = getAllStoredAttemptIds();
+    if (localIds.length > 0) {
+      setAnalyzedAttemptIds(new Set(localIds));
+    }
+
+    // 2. Sync with database
+    fetch('/api/quiz/analysis')
+      .then(r => r.json() as Promise<{ analyses?: QuizAnalysisData[] }>)
+      .then(data => {
+        if (data?.analyses?.length) {
+          setAnalyzedAttemptIds(prev => {
+            const next = new Set(prev);
+            data.analyses!.forEach(a => {
+              if (a.attemptId) {
+                next.add(Number(a.attemptId));
+                saveStoredAnalysis(a.attemptId, a);
+              }
+            });
+            return next;
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleOpenQuizAnalysis = async (res: ExamResult | null, forceReanalyze = false) => {
+    if (!res) return;
+    setSelectedExamResult(res);
+
+    const isAnalyzed = !!res.attemptId && analyzedAttemptIds.has(Number(res.attemptId));
+    const route = resolveGradeRoute(res, isAnalyzed);
+
+    // 1. Chat Action: Case 3 (Khuếch đại lời phê) or Case 4 (Điểm mù - Phỏng vấn viên)
+    // Directly place prompt into input of course chat (draft=1)
+    if (route.actionType === 'chat') {
+      setShowGradeHistoryModal(false);
+      const prompt = route.prompt || buildGradePrompt(res, route.defaultStrategy, 'detailed', res.attemptId ? getStoredAnalysis(res.attemptId) : null);
+      router.push(
+        `/course?code=${encodeURIComponent(res.courseCode || '')}&name=${encodeURIComponent(
+          res.courseName
+        )}&id=${res.courseId}&draft=1&intent=${encodeURIComponent(prompt)}`
+      );
+      return;
+    }
+
+    // 2. Modal Action: Case 1 (Toàn tri) or Case 2 (Phân tích kỹ thuật)
+    const attemptIdToUse = res.attemptId;
+    if (attemptIdToUse) {
+      // Instant re-open: if already loaded in component state
+      if (currentAnalysis && Number(currentAnalysis.attemptId) === Number(attemptIdToUse) && !forceReanalyze) {
+        setAnalysisModalOpen(true);
+        return;
+      }
+
+      // Client-side localStorage cache-first: 0 network calls, 0 token consumption, instant modal open
+      if (!forceReanalyze) {
+        const localCached = getStoredAnalysis(attemptIdToUse);
+        if (localCached) {
+          setCurrentAnalysis(localCached);
+          setAnalysisModalOpen(true);
+          return;
+        }
+      }
+
+      setAnalysisModalOpen(true);
+      setAnalysisLoading(true);
+      setAnalysisError(null);
+
+      try {
+        // Database cache-first: try fetching saved analysis from database before spending AI credits
+        if (!forceReanalyze) {
+          const checkRes = await fetch(`/api/quiz/analysis?attemptId=${attemptIdToUse}`);
+          const checkData = (await checkRes.json()) as any;
+          if (checkData?.analysis) {
+            setCurrentAnalysis({ ...checkData.analysis, cached: true });
+            saveStoredAnalysis(attemptIdToUse, checkData.analysis);
+            setAnalyzedAttemptIds(prev => new Set(prev).add(Number(attemptIdToUse)));
+            setAnalysisLoading(false);
+            return;
+          }
+        }
+
+        // Trigger analysis with 2x2 matrix context flags
+        const apiRes = await fetch('/api/quiz/analysis', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            attemptId: attemptIdToUse,
+            courseId: res.courseId,
+            courseCode: res.courseCode,
+            courseName: res.courseName,
+            quizName: res.name,
+            userId: moodle?.user?.id,
+            feedback: res.feedback,
+            has_details: route.hasDetails,
+            has_feedback: route.hasFeedback,
+            forceReanalyze,
+          }),
+        });
+        const data = (await apiRes.json()) as any;
+        if (!apiRes.ok || data.error) {
+          throw new Error(data.error || 'Không thể chẩn đoán bài thi lúc này.');
+        }
+        setCurrentAnalysis(data.analysis);
+        saveStoredAnalysis(attemptIdToUse, data.analysis);
+        setAnalyzedAttemptIds(prev => new Set(prev).add(Number(attemptIdToUse)));
+      } catch (err) {
+        setAnalysisError(err instanceof Error ? err.message : 'Có lỗi khi phân tích bài thi.');
+      } finally {
+        setAnalysisLoading(false);
+      }
+      return;
+    }
+  };
+
   return (
     <div className="page fade-in">
       {/* Hero */}
@@ -603,13 +736,30 @@ function Dashboard({
                     <div className="result-score-row">
                       <div className="result-score-group">
                         <span className={`result-score-val ${latestResult.passed ? 'pass' : 'fail'}`}>
-                          {latestResult.score}
+                          {formatGrade(latestResult.score)}
                         </span>
-                        <span className="result-score-max">/{latestResult.maxScore}</span>
+                        <span className="result-score-max">/{formatGrade(latestResult.maxScore)}</span>
                       </div>
-                      <span className={`result-status-tag ${latestResult.passed ? 'pass' : 'fail'}`}>
-                        {latestResult.percentage || `${Math.round((latestResult.score / latestResult.maxScore) * 100)}%`}
-                      </span>
+                      {(() => {
+                        const isAnalyzed = !!latestResult?.attemptId && analyzedAttemptIds.has(Number(latestResult.attemptId));
+                        const route = resolveGradeRoute(latestResult, isAnalyzed);
+                        return (
+                          <span
+                            style={{
+                              fontSize: '11px',
+                              padding: '2px 8px',
+                              borderRadius: '7px',
+                              background: `${route.badgeColor}22`,
+                              color: route.badgeColor,
+                              border: `1px solid ${route.badgeColor}55`,
+                              fontWeight: 600,
+                            }}
+                            title={route.buttonTooltip}
+                          >
+                            {route.badgeText}
+                          </span>
+                        );
+                      })()}
                     </div>
 
                     <div className="result-progress-track">
@@ -711,25 +861,27 @@ function Dashboard({
                       <BarChart3 size={14} />
                       <span>Lịch sử điểm</span>
                     </button>
-                    <button
-                      className="result-ai-btn"
-                      onClick={() =>
-                        router.push(
-                          `/course?code=${encodeURIComponent(latestResult.courseCode || '')}&name=${encodeURIComponent(
-                            latestResult.courseName
-                          )}&id=${latestResult.courseId}&draft=1&intent=${encodeURIComponent(
-                            latestResult.feedback
-                              ? `Giảng viên vừa chấm bài thi "${latestResult.name}" (${latestResult.score}/${latestResult.maxScore}đ) và nhận xét: "${latestResult.feedback}". Hãy hướng dẫn chi tiết phương hướng ôn tập và giải quyết đúng những phần này!`
-                              : `Hãy hướng dẫn ôn tập nội dung bài "${latestResult.name}" (Điểm: ${latestResult.score}/${latestResult.maxScore})`
-                          )}`
-                        )
-                      }
-                      title="Hỏi AI về kết quả và nhận xét này"
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                    >
-                      <Sparkles size={14} />
-                      <span>Hỏi AI về kết quả này</span>
-                    </button>
+                    {(() => {
+                      const isAnalyzed = !!latestResult?.attemptId && analyzedAttemptIds.has(Number(latestResult.attemptId));
+                      const route = resolveGradeRoute(latestResult, isAnalyzed);
+                      return (
+                        <button
+                          className="result-ai-btn"
+                          onClick={() => handleOpenQuizAnalysis(latestResult)}
+                          title={route.buttonTooltip}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            background: route.buttonGradient,
+                            borderColor: route.borderColor,
+                          }}
+                        >
+                          <Sparkles size={14} />
+                          <span>{route.buttonLabel}</span>
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
               </>
@@ -993,14 +1145,33 @@ function Dashboard({
                               color: res.passed ? '#22c55e' : '#ef4444',
                             }}
                           >
-                            {res.score}
+                            {formatGrade(res.score)}
                           </span>
-                          <span style={{ fontSize: '13px', color: '#94a3b8' }}>/{res.maxScore}</span>
+                          <span style={{ fontSize: '13px', color: '#94a3b8' }}>/{formatGrade(res.maxScore)}</span>
                         </div>
                         <span className={`result-status-tag ${res.passed ? 'pass' : 'fail'}`}>
-                          {res.passed ? '✓ Đạt' : '✕ Cần cải thiện'} (
-                          {res.percentage || `${Math.round((res.score / res.maxScore) * 100)}%`})
+                          {res.passed ? '✓ Đạt' : '✕ Cần cải thiện'}
                         </span>
+                        {(() => {
+                          const isAnalyzed = !!res.attemptId && analyzedAttemptIds.has(Number(res.attemptId));
+                          const route = resolveGradeRoute(res, isAnalyzed);
+                          return (
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                padding: '2px 8px',
+                                borderRadius: '7px',
+                                background: `${route.badgeColor}22`,
+                                color: route.badgeColor,
+                                border: `1px solid ${route.badgeColor}55`,
+                                fontWeight: 600,
+                              }}
+                              title={route.buttonTooltip}
+                            >
+                              {route.badgeText}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
 
@@ -1092,26 +1263,29 @@ function Dashboard({
                           Moodle ↗
                         </a>
                       )}
-                      <button
-                        type="button"
-                        className="result-ai-btn"
-                        style={{ fontSize: '12px', padding: '0.45rem 0.95rem' }}
-                        onClick={() => {
-                          setShowGradeHistoryModal(false);
-                          router.push(
-                            `/course?code=${encodeURIComponent(res.courseCode || '')}&name=${encodeURIComponent(
-                              res.courseName
-                            )}&id=${res.courseId}&draft=1&intent=${encodeURIComponent(
-                              res.feedback
-                                ? `Chào Gia sư AI, giảng viên vừa chấm bài thi "${res.name}" môn ${res.courseName} (${res.score}/${res.maxScore}đ) và nhận xét: "${res.feedback}". Hãy hướng dẫn chi tiết phương hướng ôn tập và giải quyết đúng những phần này!`
-                                : `Hãy hướng dẫn ôn tập nội dung bài thi "${res.name}" môn ${res.courseName} (Điểm: ${res.score}/${res.maxScore})`
-                            )}`
-                          );
-                        }}
-                        title="Thảo luận với Gia sư AI về bài thi này"
-                      >
-                        ✦ Hỏi AI về bài này
-                      </button>
+                      {(() => {
+                        const isAnalyzed = !!res.attemptId && analyzedAttemptIds.has(Number(res.attemptId));
+                        const route = resolveGradeRoute(res, isAnalyzed);
+                        return (
+                          <button
+                            type="button"
+                            className="result-ai-btn"
+                            style={{
+                              fontSize: '12px',
+                              padding: '0.45rem 0.95rem',
+                              background: route.buttonGradient,
+                              borderColor: route.borderColor,
+                            }}
+                            onClick={() => {
+                              setShowGradeHistoryModal(false);
+                              handleOpenQuizAnalysis(res);
+                            }}
+                            title={route.buttonTooltip}
+                          >
+                            {route.buttonLabel}
+                          </button>
+                        );
+                      })()}
                     </div>
                   </div>
                 ))
@@ -1120,6 +1294,43 @@ function Dashboard({
           </div>
         </div>
       )}
+
+      {/* Quiz Analysis Diagnosis Modal */}
+      <QuizAnalysisModal
+        isOpen={analysisModalOpen}
+        onClose={() => setAnalysisModalOpen(false)}
+        analysis={currentAnalysis}
+        loading={analysisLoading}
+        error={analysisError}
+        onRetry={() => selectedExamResult && handleOpenQuizAnalysis(selectedExamResult, false)}
+        onReanalyze={() => selectedExamResult && handleOpenQuizAnalysis(selectedExamResult, true)}
+        onStartRemediation={topics => {
+          setAnalysisModalOpen(false);
+          const cId = currentAnalysis?.courseId || selectedExamResult?.courseId || '';
+          const cCode = selectedExamResult?.courseCode || currentAnalysis?.courseName || '';
+          router.push(
+            `/course?code=${encodeURIComponent(cCode)}&id=${cId}&tool=Quiz&mode=targeted&topics=${encodeURIComponent(
+              topics.join(',')
+            )}`
+          );
+        }}
+        onAskTutor={analysisData => {
+          setAnalysisModalOpen(false);
+          if (selectedExamResult) {
+            const prompt = buildGradePrompt(
+              selectedExamResult,
+              'roadmap',
+              'detailed',
+              analysisData || currentAnalysis
+            );
+            router.push(
+              `/course?code=${encodeURIComponent(selectedExamResult.courseCode || '')}&name=${encodeURIComponent(
+                selectedExamResult.courseName
+              )}&id=${selectedExamResult.courseId}&draft=1&intent=${encodeURIComponent(prompt)}`
+            );
+          }
+        }}
+      />
     </div>
   );
 }

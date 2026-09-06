@@ -66,6 +66,9 @@ export type ExamResult = {
   courseCode?: string;
   name: string;
   itemModule?: string;
+  quizId?: number;
+  cmid?: number;
+  attemptId?: number;
   score: number;
   maxScore: number;
   minScore?: number;
@@ -75,6 +78,40 @@ export type ExamResult = {
   passed?: boolean;
   url?: string;
 };
+
+export type QuestionAnalysisItem = {
+  slot: number;
+  questionText: string;
+  studentAnswer: string;
+  rightAnswer: string;
+  status: string; // 'Incorrect' | 'Partially correct' | string
+  mark: string;
+  maxmark: number;
+  feedback?: string;
+  diagnosedReason?: string;
+};
+
+export type QuizAnalysisData = {
+  id?: string;
+  attemptId: number;
+  quizId?: number;
+  quizName: string;
+  courseId: number;
+  courseName: string;
+  score: number;
+  maxScore: number;
+  percentage: string;
+  totalQuestions: number;
+  wrongCount: number;
+  partialCount: number;
+  weakTopics: string[];
+  recommendations: string[];
+  overview: string;
+  questionsAnalysis: QuestionAnalysisItem[];
+  analyzedAt: string;
+  cached?: boolean;
+};
+
 
 export type MoodleData = {
   mode: 'demo' | 'live';
