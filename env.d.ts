@@ -15,6 +15,7 @@ declare namespace NodeJS {
     ANTHROPIC_API_KEY?: string;
     MOODLE_URL?: string;
     MOODLE_TOKEN?: string;
+    MOODLE_TOKEN_ENCRYPTION_KEY?: string;
     NEXT_PUBLIC_FIREBASE_API_KEY?: string;
     NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN?: string;
     NEXT_PUBLIC_FIREBASE_PROJECT_ID?: string;
@@ -26,5 +27,6 @@ declare namespace NodeJS {
     FIREBASE_PROJECT_ID?: string;
     FIREBASE_CLIENT_EMAIL?: string;
     FIREBASE_PRIVATE_KEY?: string;
+    CRON_SECRET?: string;
   }
 }

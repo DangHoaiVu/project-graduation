@@ -21,6 +21,7 @@ export interface ModelOption {
 export interface GenerateTextOptions {
   system: string;
   userPrompt: string;
+  signal?: AbortSignal;
   /** Chat history in OpenAI-style format */
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   temperature?: number;
@@ -178,6 +179,7 @@ async function callProvider(
   modelId: string,
   opts: GenerateTextOptions
 ): Promise<GenerateTextResult | null> {
+  opts.signal?.throwIfAborted();
   if (isProviderBlocked(provider)) {
     return null;
   }
@@ -209,6 +211,7 @@ export async function generateText(
       const result = await callProvider(parsed.provider, parsed.modelId, opts);
       if (result?.text) return result;
     } catch (err) {
+      if (opts.signal?.aborted) throw err;
       if (isQuotaExhaustedError(err)) {
         blockProviderUntilTomorrow(parsed.provider, String(err));
       }
@@ -226,14 +229,17 @@ export async function generateText(
   ];
 
   for (const { provider, models } of cascadeProviders) {
+    opts.signal?.throwIfAborted();
     if (isProviderBlocked(provider)) {
       continue; // Skip entire provider if blocked until tomorrow
     }
     for (const modelId of models) {
       try {
+        opts.signal?.throwIfAborted();
         const result = await callProvider(provider, modelId, opts);
         if (result?.text) return result;
       } catch (err) {
+        if (opts.signal?.aborted) throw err;
         if (isQuotaExhaustedError(err)) {
           blockProviderUntilTomorrow(provider, String(err));
           break; // Stop attempting other models from this exhausted provider
@@ -292,6 +298,7 @@ async function callGemini(modelId: string, opts: GenerateTextOptions): Promise<G
       model: modelId,
       contents: formattedContents,
       config,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
 
     const text = (response.text || '').trim();
@@ -301,6 +308,7 @@ async function callGemini(modelId: string, opts: GenerateTextOptions): Promise<G
     const groundingMetadata = (response as any).candidates?.[0]?.groundingMetadata || null;
     return { text, groundingMetadata };
   } catch (err) {
+    if (opts.signal?.aborted) throw err;
     if (isQuotaExhaustedError(err)) {
       blockProviderUntilTomorrow('gemini', String(err));
     }
@@ -339,6 +347,7 @@ async function callAnthropic(modelId: string, opts: GenerateTextOptions): Promis
       system: systemPrompt,
       messages,
       temperature: opts.temperature ?? 0.1,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
 
     const textBlocks = response.content.filter(b => b.type === 'text');
@@ -347,6 +356,7 @@ async function callAnthropic(modelId: string, opts: GenerateTextOptions): Promis
 
     return { text };
   } catch (err) {
+    if (opts.signal?.aborted) throw err;
     if (isQuotaExhaustedError(err)) {
       blockProviderUntilTomorrow('anthropic', String(err));
     }
@@ -386,12 +396,14 @@ async function callGroq(modelId: string, opts: GenerateTextOptions): Promise<Gen
       createOpts.response_format = { type: 'json_object' };
     }
 
+    if (opts.signal) createOpts.signal = opts.signal;
     const completion = await client.chat.completions.create(createOpts);
     const text = completion.choices[0]?.message?.content?.trim() || '';
     if (!text) return null;
 
     return { text };
   } catch (err) {
+    if (opts.signal?.aborted) throw err;
     if (isQuotaExhaustedError(err)) {
       blockProviderUntilTomorrow('groq', String(err));
     }

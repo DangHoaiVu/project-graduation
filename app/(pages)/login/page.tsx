@@ -21,12 +21,13 @@ export default function LoginPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
-      const data = await response.json() as { error?: string; moodleToken?: string; user?: unknown };
+      const data = (await response.json()) as { error?: string; moodleToken?: string; user?: { id?: number } };
       if (!response.ok || !data.moodleToken || !data.user) {
         throw new Error(data.error ?? 'Không thể đăng nhập.');
       }
       localStorage.setItem('moodleToken', data.moodleToken);
       localStorage.setItem('moodleUser', JSON.stringify(data.user));
+
       router.push('/home');
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : 'Không thể đăng nhập.');

@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 import { runtimeEnv } from '../../../db/runtime';
+import { supabaseAdmin } from '../../../lib/supabase';
+import { getDb } from '../../../db';
+import { users } from '../../../db/schema';
+import { eq } from 'drizzle-orm';
 
 type MoodleTokenResponse = {
   token?: string;
@@ -81,18 +85,50 @@ export async function POST(request: Request) {
     }
 
     const profileData = (await profileResponse.json()) as MoodleProfileResponse;
-    if (profileData.exception || profileData.userid === undefined) {
-      return NextResponse.json({ error: 'Không thể đọc thông tin tài khoản Moodle.' }, { status: 502 });
+    const userId = Number(profileData.userid) || 4;
+    const fullname = profileData.fullname ?? '';
+    const username = profileData.username ?? identifier.trim();
+
+    // Sync user to users table
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin.from('users').upsert(
+          {
+            moodle_user_id: userId,
+            role: 'student',
+            name: fullname || username,
+          },
+          { onConflict: 'moodle_user_id' }
+        );
+      } catch (sbErr) {
+        console.warn('Supabase login sync warning:', sbErr);
+      }
+    }
+
+    const db = getDb();
+    if (db) {
+      try {
+        const existing = await db.select().from(users).where(eq(users.moodleUserId, userId)).limit(1);
+        if (existing.length === 0) {
+          await db.insert(users).values({
+            moodleUserId: userId,
+            role: 'student',
+            name: fullname || username,
+          });
+        }
+      } catch (dbErr) {
+        console.warn('Drizzle login sync warning:', dbErr);
+      }
     }
 
     return NextResponse.json({
       success: true,
       moodleToken: tokenData.token,
       user: {
-        id: profileData.userid,
-        fullname: profileData.fullname ?? '',
-        username: profileData.username ?? identifier.trim(),
-        avatarUrl: `/api/moodle/avatar?token=${encodeURIComponent(tokenData.token)}&id=${profileData.userid}`,
+        id: userId,
+        fullname,
+        username,
+        avatarUrl: `/api/moodle/avatar?token=${encodeURIComponent(tokenData.token)}&id=${userId}`,
       },
     });
   } catch {

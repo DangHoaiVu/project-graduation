@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -25,6 +26,7 @@ import {
   ChevronDown,
   Folder,
   BarChart3,
+  BookmarkPlus,
   GraduationCap,
   Sparkles,
   Lock,
@@ -47,6 +49,8 @@ import {
   Flame,
   UploadCloud,
   Layout,
+  Pencil,
+  Bell,
 } from 'lucide-react';
 import {
   baseCourses,
@@ -71,10 +75,14 @@ import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
 import { InteractiveMindmap } from '@/app/components/InteractiveMindmap';
 import { QuizComponent } from '@/app/components/QuizComponent';
 import { QuizAnalysisModal } from '@/app/components/QuizAnalysisModal';
+import { CourseHeader } from '@/app/components/CourseHeader';
+import { CourseTopBar } from '@/app/components/CourseTopBar';
+import { CourseSwitcher } from '@/app/components/CourseSwitcher';
 import {
   getStoredAnalysis,
   saveStoredAnalysis,
   getAllStoredAttemptIds,
+  removeStoredAnalysis,
 } from '@/app/lib/quiz-client-cache';
 import {
   resolveGradeRoute,
@@ -87,6 +95,9 @@ import { SlidePresentation } from '@/app/components/SlidePresentation';
 import type { SlideDeckData } from '@/lib/pptx-export';
 import { TeacherPortal } from '@/app/components/teacher/TeacherPortal';
 import { exportSummaryToDocx, copyRichHtmlForWord, exportChatMessageToDocx } from '@/lib/export-utils';
+import { getDeviceId } from '@/app/lib/device-id';
+
+const MOODLE_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 
 /* ── Flashcards Component ────────────────────────────────── */
 
@@ -150,7 +161,7 @@ function Flashcards({
             <MarkdownRenderer content={flip ? (cards[i]?.back || '') : (cards[i]?.front || '')} />
           </div>
           <div className="flash-card-footer">
-            <span>{flip ? '🔄 Nhấn để xem câu hỏi' : '🔄 Nhấn để lật xem đáp án'}</span>
+            <span>{flip ? 'Nhấn để xem câu hỏi' : 'Nhấn để lật xem đáp án'}</span>
           </div>
         </div>
       ) : (
@@ -193,6 +204,8 @@ function Flashcards({
 /* ── Study Artifact Component ────────────────────────────── */
 
 interface GeneratedArtifact {
+  id: string;
+  name: string;
   data: unknown;
   level: 'simple' | 'standard' | 'complex';
   topic: string;
@@ -206,6 +219,7 @@ function StudyArtifact({
   selectedSourcesCount,
   onGenerate,
   onReset,
+  onStop,
   copyText,
   notify,
 }: {
@@ -216,6 +230,7 @@ function StudyArtifact({
   selectedSourcesCount: number;
   onGenerate: (level: 'simple' | 'standard' | 'complex', topic: string, allowExternal: boolean) => void;
   onReset: () => void;
+  onStop?: () => void;
   copyText: (s: string) => void;
   notify: (s: string) => void;
 }) {
@@ -245,15 +260,87 @@ function StudyArtifact({
 
   if (loading) {
     return (
-      <div className="artifact artifact-loading">
-        <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Sparkles size={16} />
-        </span>
-        <h3>Đang phân tích tài liệu và khởi tạo {type.toLowerCase()} cấp độ {selectedLevel === 'simple' ? 'Cơ bản' : selectedLevel === 'complex' ? 'Chuyên sâu' : 'Tiêu chuẩn'}…</h3>
-        <div className="typing">
-          <i />
-          <i />
-          <i />
+      <div
+        className="artifact artifact-loading"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          minHeight: 'calc(100vh - 220px)',
+          height: '100%',
+          width: '100%',
+          boxSizing: 'border-box',
+          padding: '2.5rem 1.5rem 1.5rem',
+          position: 'relative',
+        }}
+      >
+        {/* Top spacer to keep center content vertically balanced */}
+        <div style={{ flex: '1 1 0%', minHeight: '30px' }} />
+
+        {/* Center Loading Status */}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '0.9rem',
+            textAlign: 'center',
+            maxWidth: '580px',
+          }}
+        >
+          <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Sparkles size={16} />
+          </span>
+          <h3 style={{ margin: 0, textAlign: 'center', fontSize: '14.5px', fontWeight: 500, color: '#f1f5f9', lineHeight: 1.5 }}>
+            Đang phân tích tài liệu và khởi tạo {type.toLowerCase()} cấp độ {selectedLevel === 'simple' ? 'Cơ bản' : selectedLevel === 'complex' ? 'Chuyên sâu' : 'Tiêu chuẩn'}…
+          </h3>
+          <div className="typing">
+            <i />
+            <i />
+            <i />
+          </div>
+        </div>
+
+        {/* Bottom Stop Button Container */}
+        <div
+          style={{
+            flex: '1 1 0%',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+            width: '100%',
+            paddingBottom: '1rem',
+            minHeight: '80px',
+            position: 'sticky',
+            bottom: '1.25rem',
+          }}
+        >
+          {onStop && (
+            <button
+              type="button"
+              onClick={onStop}
+              style={{
+                background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                color: '#fff',
+                border: 'none',
+                padding: '0.55rem 1.35rem',
+                borderRadius: '10px',
+                fontWeight: 600,
+                fontSize: '13px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: '0 4px 14px rgba(239, 68, 68, 0.4)',
+                transition: 'all 0.2s ease',
+              }}
+              title="Dừng khởi tạo học liệu"
+            >
+              <Square size={13} fill="currentColor" />
+              <span>Dừng tạo {type.toLowerCase()}</span>
+            </button>
+          )}
         </div>
       </div>
     );
@@ -473,16 +560,7 @@ function StudyArtifact({
             <FileDown size={14} />
             Xuất Word (.docx)
           </button>
-          <button
-            onClick={() => {
-              window.print();
-              notify('Đã mở giao diện in / lưu PDF');
-            }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-          >
-            <Printer size={14} />
-            In tài liệu
-          </button>
+
         </div>
       </div>
       <h3>Tổng quan</h3>
@@ -541,6 +619,16 @@ function isValidKnowledgeSource(type: string, name: string) {
   return false;
 }
 
+function isStudentSource(item: CourseSourceItem) {
+  return Boolean(
+    item.id?.startsWith('mat-') ||
+    item.id?.startsWith('upload-') ||
+    item.sizeOrPages?.includes('cá nhân') ||
+    item.sizeOrPages?.includes('đã nạp') ||
+    item.sizeOrPages?.includes('Ghi chú')
+  );
+}
+
 function getSourceBadge(type: string, name: string): { label: React.ReactNode; className: string } {
   const upperType = (type || '').toUpperCase();
   const lowerName = name.toLowerCase();
@@ -575,17 +663,31 @@ function CourseDetailContent() {
   const [toast, setToast] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [notifications, setNotifications] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
   const [profile, setProfile] = useState(false);
   const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if ('Notification' in window) setNotificationPermission(Notification.permission);
+  }, []);
 
   const notify = (text: string) => {
     setToast(text);
     window.setTimeout(() => setToast(''), 2600);
   };
 
+  const handleLogout = async () => {
+    localStorage.removeItem('moodleToken');
+    localStorage.removeItem('moodleUser');
+    localStorage.removeItem('moodleData');
+    router.push('/login');
+  };
+
   // Sync Moodle data and read local caches
-  const syncMoodleData = async () => {
+  const syncMoodleData = async (force = false) => {
+    const cachedAt = Number(localStorage.getItem('moodleDataSyncedAt') || 0);
+    if (!force && localStorage.getItem('moodleData') && Date.now() - cachedAt < MOODLE_CACHE_MAX_AGE_MS) return;
     setSyncing(true);
     try {
       const token = localStorage.getItem('moodleToken');
@@ -596,6 +698,7 @@ function CourseDetailContent() {
       if (res.ok && data) {
         setMoodle(data);
         localStorage.setItem('moodleData', JSON.stringify(data));
+        localStorage.setItem('moodleDataSyncedAt', String(Date.now()));
         if (data.user) {
           setUser(prev => {
             const avatarUrl =
@@ -646,10 +749,11 @@ function CourseDetailContent() {
         setMoodle(JSON.parse(storedMoodle) as MoodleData);
       } catch {
         localStorage.removeItem('moodleData');
+        localStorage.removeItem('moodleDataSyncedAt');
       }
     }
 
-    void syncMoodleData();
+    void syncMoodleData(false);
   }, []);
 
   // Compute all available courses (exclusively from Moodle live courses)
@@ -740,6 +844,12 @@ function CourseDetailContent() {
 
   const isTeacherCourse = Boolean(activeCourse.isTeacher);
 
+  const handleCourseChange = (target: Course) => {
+    router.replace(
+      `/course?code=${encodeURIComponent(target.code)}&name=${encodeURIComponent(target.name)}&id=${target.id ?? ''}`
+    );
+  };
+
   // Compute knowledge sources for the active course (from Moodle resources only)
   const courseSources: CourseSourceItem[] = useMemo(() => {
     const results: CourseSourceItem[] = [];
@@ -801,12 +911,24 @@ function CourseDetailContent() {
   const [sources, setSources] = useState<CourseSourceItem[]>(courseSources);
   const [checked, setChecked] = useState<boolean[]>(() => new Array(courseSources.length).fill(true));
   const [sourceQuery, setSourceQuery] = useState('');
+  const sourceCourseKeyRef = useRef<string | null>(null);
+  const sourceItemsRef = useRef<CourseSourceItem[]>(courseSources);
 
   // Sync sources whenever active course or Moodle data updates
   useEffect(() => {
-    setSources(courseSources);
-    setChecked(new Array(courseSources.length).fill(true));
-  }, [courseSources]);
+    const courseKey = `${activeCourse.id ?? ''}:${activeCourse.code}`;
+    const isSameCourse = sourceCourseKeyRef.current === courseKey;
+    const personalSources = isSameCourse ? sourceItemsRef.current.filter(isStudentSource) : [];
+    const nextSources = [...personalSources, ...courseSources];
+    sourceItemsRef.current = nextSources;
+    setSources(nextSources);
+    setChecked(new Array(nextSources.length).fill(true));
+    sourceCourseKeyRef.current = courseKey;
+  }, [activeCourse.id, activeCourse.code, courseSources]);
+
+  useEffect(() => {
+    sourceItemsRef.current = sources;
+  }, [sources]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -817,6 +939,7 @@ function CourseDetailContent() {
       sources: [`${courseSources.length} tài liệu sẵn sàng`],
     },
   ]);
+  const [chatSessionId, setChatSessionId] = useState<string | null>(null);
 
   // Reset chat and all study artifacts (mindmap, flashcard, summary, slide) when switching courses
   useEffect(() => {
@@ -827,6 +950,7 @@ function CourseDetailContent() {
         sources: [`${courseSources.length} tài liệu sẵn sàng`],
       },
     ]);
+    setChatSessionId(null);
     setArtifactsMap({});
     if (!initialIntent || !draftMode) {
       setInput('');
@@ -841,13 +965,24 @@ function CourseDetailContent() {
   );
   const [loading, setLoading] = useState(false);
   const [tool, setTool] = useState(initialIntent === '__mindmap' ? 'Mindmap' : 'Chat');
-  const [artifactsMap, setArtifactsMap] = useState<Record<string, GeneratedArtifact>>({});
+  const [artifactsMap, setArtifactsMap] = useState<Record<string, GeneratedArtifact[]>>({});
+  const [selectedArtifactIds, setSelectedArtifactIds] = useState<Record<string, string>>({});
+  const [showArtifactList, setShowArtifactList] = useState(false);
   const [artifactLoading, setArtifactLoading] = useState(false);
+  const artifactAbortRef = useRef<AbortController | null>(null);
+  const artifactRequestIdRef = useRef<string | null>(null);
   const [allowExternalSource, setAllowExternalSource] = useState<boolean>(false);
   const [answerStyle, setAnswerStyle] = useState<'concise' | 'detailed'>('concise');
   const [isSourcePanelCollapsed, setIsSourcePanelCollapsed] = useState<boolean>(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const selectedModel = 'auto';
+  const [mounted, setMounted] = useState<boolean>(false);
+  useEffect(() => {
+    setMounted(true);
+    if (typeof window !== 'undefined' && window.innerWidth < 1100) {
+      setIsSourcePanelCollapsed(true);
+    }
+  }, []);
   const [showGradeHistory, setShowGradeHistory] = useState<boolean>(false);
   const [showActivityModal, setShowActivityModal] = useState<boolean>(false);
   const [teacherTab, setTeacherTab] = useState<'assistant' | 'grades' | 'quiz'>('assistant');
@@ -865,6 +1000,150 @@ function CourseDetailContent() {
   const [uploadLoading, setUploadLoading] = useState<boolean>(false);
   const [uploadDragActive, setUploadDragActive] = useState<boolean>(false);
   const uploadFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Hydrate course-specific persistent data (personal_materials, learning_artifacts, chat_sessions) from Database
+  useEffect(() => {
+    let isCancelled = false;
+    const currentUserId = user?.id || 4;
+    const currentCourseId = activeCourse.id;
+    if (!currentCourseId) return;
+
+    async function hydrateCourseData() {
+      // 1. Fetch personal materials and merge into sources
+      try {
+        const matRes = await fetch(`/api/documents/process?moodleCourseId=${currentCourseId}&userId=${currentUserId}`);
+        const matData = (await matRes.json()) as {
+          materials?: Array<{ id: string | number; title: string; storage_url?: string; storageUrl?: string }>;
+        };
+        if (!isCancelled && matData?.materials && Array.isArray(matData.materials)) {
+          const personalItems: CourseSourceItem[] = matData.materials.map(mat => {
+            const rawUrl = mat.storage_url || mat.storageUrl || '';
+            const ext = (mat.title || rawUrl).split('.').pop()?.toLowerCase() || '';
+            let type: 'PDF' | 'DOCX' | 'PPTX' | 'TXT' | 'LINK' | 'FILE' = 'FILE';
+            if (ext === 'pdf') type = 'PDF';
+            else if (ext === 'docx' || ext === 'doc') type = 'DOCX';
+            else if (ext === 'pptx' || ext === 'ppt') type = 'PPTX';
+            else if (ext === 'txt') type = 'TXT';
+            else if (rawUrl.startsWith('http')) type = 'LINK';
+
+            return {
+              id: `mat-${mat.id}`,
+              name: mat.title,
+              type,
+              sizeOrPages: 'Tài liệu cá nhân',
+              url: rawUrl || undefined,
+              courseCode: activeCourse.code,
+            };
+          });
+
+          if (personalItems.length > 0) {
+            setSources(prev => {
+              const existingIds = new Set(prev.map(p => p.id || p.name));
+              const newItems = personalItems.filter(p => !existingIds.has(p.id || p.name));
+              if (newItems.length > 0) {
+                setChecked(old => [...new Array(newItems.length).fill(true), ...old]);
+                return [...newItems, ...prev];
+              }
+              return prev;
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to hydrate personal materials:', err);
+      }
+
+      // 2. Fetch learning artifacts (mindmap, flashcards, summary, slides)
+      try {
+        const artRes = await fetch(`/api/learning-artifacts?moodleCourseId=${currentCourseId}&userId=${currentUserId}`);
+        const artData = (await artRes.json()) as {
+          artifacts?: Array<{
+            artifact_type?: string;
+            artifactType?: string;
+            content_data?: unknown;
+            contentData?: unknown;
+          }>;
+        };
+        if (!isCancelled && artData?.artifacts && Array.isArray(artData.artifacts)) {
+          const hydratedMap: Record<string, GeneratedArtifact[]> = {};
+          for (const a of artData.artifacts) {
+            let toolKey: string | null = null;
+            const aType = a.artifact_type || a.artifactType;
+            if (aType === 'summary') toolKey = 'Tóm tắt';
+            else if (aType === 'mindmap') toolKey = 'Mindmap';
+            else if (aType === 'slides' || aType === 'slide' || aType === 'presentation') toolKey = 'Slide';
+            else if (aType === 'flashcards' || aType === 'flashcard') toolKey = 'Flashcard';
+
+            if (toolKey) {
+              const cd = a.content_data || a.contentData;
+              let artifactData = cd;
+              let level: 'simple' | 'standard' | 'complex' = 'standard';
+              let topic = activeCourse.name;
+              if (cd && typeof cd === 'object') {
+                if ('data' in cd) artifactData = (cd as Record<string, unknown>).data;
+                if ('level' in cd && typeof (cd as Record<string, unknown>).level === 'string') {
+                  level = (cd as { level: 'simple' | 'standard' | 'complex' }).level;
+                }
+                if ('topic' in cd && typeof (cd as Record<string, unknown>).topic === 'string') {
+                  topic = (cd as { topic: string }).topic;
+                }
+              }
+              const hydratedArtifact = {
+                id: String((a as { id?: string | number }).id || `${toolKey}-${Date.now()}-${Math.random()}`),
+                name: cd && typeof cd === 'object' && typeof (cd as Record<string, unknown>).name === 'string'
+                  ? (cd as Record<string, unknown>).name as string
+                  : topic,
+                data: artifactData,
+                level,
+                topic,
+              };
+              hydratedMap[toolKey] = [...(hydratedMap[toolKey] || []), hydratedArtifact];
+            }
+          }
+          if (Object.keys(hydratedMap).length > 0) {
+            setArtifactsMap(prev => ({ ...prev, ...hydratedMap }));
+            setSelectedArtifactIds(prev => {
+              const next = { ...prev };
+              for (const [toolKey, items] of Object.entries(hydratedMap)) {
+                if (items.length > 0 && !next[toolKey]) next[toolKey] = items[0].id;
+              }
+              return next;
+            });
+            setShowArtifactList(false);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to hydrate learning artifacts:', err);
+      }
+
+      // 3. Fetch latest chat session
+      try {
+        const chatRes = await fetch(`/api/chat-sessions?moodleCourseId=${currentCourseId}&userId=${currentUserId}`);
+        const chatData = (await chatRes.json()) as {
+          latest?: {
+            id?: string;
+            messages?: ChatMessage[];
+          };
+        };
+        if (
+          !isCancelled &&
+          chatData?.latest?.messages &&
+          Array.isArray(chatData.latest.messages) &&
+          chatData.latest.messages.length > 0
+        ) {
+          setChat(chatData.latest.messages as ChatMessage[]);
+          if (chatData.latest.id) setChatSessionId(String(chatData.latest.id));
+        }
+      } catch (err) {
+        console.warn('Failed to hydrate chat session:', err);
+      }
+    }
+
+    void hydrateCourseData();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeCourse.id, user?.id, activeCourse.code, activeCourse.name]);
 
   // Compute exam results for current active course ONLY
   const courseExamResults = useMemo(() => {
@@ -1092,7 +1371,13 @@ function CourseDetailContent() {
         // Database cache-first: fetch existing saved analysis before spending AI credits
         if (!forceReanalyze) {
           const checkRes = await fetch(`/api/quiz/analysis?attemptId=${attemptIdToUse}`);
-          const checkData = (await checkRes.json()) as any;
+          const checkText = await checkRes.text();
+          let checkData: { analysis?: QuizAnalysisData; error?: string } = {};
+          try {
+            checkData = JSON.parse(checkText) as typeof checkData;
+          } catch {
+            throw new Error(checkText.trim().slice(0, 240) || 'Không thể đọc dữ liệu chẩn đoán đã lưu.');
+          }
           if (checkData?.analysis) {
             setCurrentAnalysis({ ...checkData.analysis, cached: true });
             saveStoredAnalysis(attemptIdToUse, checkData.analysis);
@@ -1119,8 +1404,14 @@ function CourseDetailContent() {
             forceReanalyze,
           }),
         });
-        const data = (await apiRes.json()) as any;
-        if (!apiRes.ok || data.error) {
+        const responseText = await apiRes.text();
+        let data: { analysis?: QuizAnalysisData; error?: string } = {};
+        try {
+          data = JSON.parse(responseText) as typeof data;
+        } catch {
+          throw new Error(responseText.trim().slice(0, 240) || 'Máy chủ không trả về dữ liệu chẩn đoán hợp lệ.');
+        }
+        if (!apiRes.ok || data.error || !data.analysis) {
           throw new Error(data.error || 'Không thể chẩn đoán bài thi lúc này.');
         }
         setCurrentAnalysis(data.analysis);
@@ -1141,11 +1432,25 @@ function CourseDetailContent() {
       if (e.key === 'Escape') {
         if (showGradeHistory) setShowGradeHistory(false);
         if (showActivityModal) setShowActivityModal(false);
+        if (!isSourcePanelCollapsed && typeof window !== 'undefined' && window.innerWidth < 1100) {
+          setIsSourcePanelCollapsed(true);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showGradeHistory, showActivityModal]);
+  }, [showGradeHistory, showActivityModal, isSourcePanelCollapsed]);
+
+  // Lock body scroll when any modal is active in course page
+  useEffect(() => {
+    const isAnyModalOpen = showGradeHistory || showActivityModal || showUploadModal || profile;
+    if (!isAnyModalOpen) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [showGradeHistory, showActivityModal, showUploadModal, profile]);
 
   // Auto cleanup RAM vector cache on course unmount / exit
   useEffect(() => {
@@ -1180,15 +1485,24 @@ function CourseDetailContent() {
       body: JSON.stringify({ courseCode: activeCourse.code }),
     }).catch(() => {});
 
-    setChat([
+    const resetChat: ChatMessage[] = [
       {
         role: 'ai',
         text: `Trợ lý Học tập AI môn ${activeCourse.name} đã sẵn sàng. Bạn có thể đặt câu hỏi hoặc yêu cầu phân tích, tóm tắt tài liệu.`,
         sources: [`${courseSources.length} tài liệu sẵn sàng`],
       },
-    ]);
+    ];
+    setChat(resetChat);
+    const uId = user?.id || 4;
+    const cId = activeCourse.id || 1;
+    fetch(`/api/chat-sessions?userId=${uId}&moodleCourseId=${cId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    }).catch(() => {});
+
+    setChatSessionId(null);
     setInput('');
-    notify('Đã xóa lịch sử trò chuyện & giải phóng bộ nhớ RAM');
+    notify('Đã xóa lịch sử trò chuyện khỏi cơ sở dữ liệu');
   };
 
   // Stop AI response manually
@@ -1255,6 +1569,8 @@ function CourseDetailContent() {
           course: `${activeCourse.name} (${activeCourse.code})`,
           courseId: activeCourse.id,
           courseCode: activeCourse.code,
+          userId: user?.id || 4,
+          gradebook: courseExamResults,
           sources: selectedSources,
           sourceNames: selectedSourceNames,
           allowExternalSource,
@@ -1265,14 +1581,33 @@ function CourseDetailContent() {
       });
       const data = (await res.json()) as TutorResponse;
       if (!res.ok) throw new Error(data.error);
-      setChat(v => [
-        ...v,
-        {
-          role: 'ai',
-          text: data.answer ?? '',
-          sources: data.sources ?? [],
-        },
-      ]);
+      const aiReply: ChatMessage = {
+        role: 'ai',
+        text: data.answer ?? '',
+        sources: data.sources ?? [],
+      };
+      setChat(v => {
+        const updated = [...v, aiReply];
+        const uId = user?.id || 4;
+        const cId = activeCourse.id || 1;
+        fetch('/api/chat-sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: uId,
+            userName: user?.fullname || 'Sinh viên',
+            moodleCourseId: cId,
+            sessionId: chatSessionId || undefined,
+            messages: updated,
+          }),
+        })
+          .then(response => response.json() as Promise<{ session?: { id?: string } }>)
+          .then(result => {
+            if (result.session?.id) setChatSessionId(String(result.session.id));
+          })
+          .catch(err => console.warn('Chat session save note:', err));
+        return updated;
+      });
     } catch (e) {
       if ((e as Error)?.name === 'AbortError') {
         return;
@@ -1319,6 +1654,26 @@ function CourseDetailContent() {
     setTool(next);
   };
 
+  // Manual abort for artifact generation
+  const stopArtifactGeneration = () => {
+    const requestId = artifactRequestIdRef.current;
+    if (requestId) {
+      void fetch('/api/study-tools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'cancel', requestId }),
+        keepalive: true,
+      }).catch(() => {});
+    }
+    if (artifactAbortRef.current) {
+      artifactAbortRef.current.abort();
+      artifactAbortRef.current = null;
+    }
+    artifactRequestIdRef.current = null;
+    setArtifactLoading(false);
+    notify('Đã dừng tạo học liệu theo yêu cầu.');
+  };
+
   // On-demand generation triggered only when user validates
   const generateToolArtifact = async (
     type: string,
@@ -1339,16 +1694,38 @@ function CourseDetailContent() {
         : 'flashcards';
     const effectiveAllowExternal = allowExternal !== undefined ? allowExternal : allowExternalSource;
 
+    if (artifactAbortRef.current) {
+      artifactAbortRef.current.abort();
+    }
+    if (artifactRequestIdRef.current) {
+      void fetch('/api/study-tools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'cancel', requestId: artifactRequestIdRef.current }),
+        keepalive: true,
+      }).catch(() => {});
+    }
+    const controller = new AbortController();
+    const requestId = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    artifactAbortRef.current = controller;
+    artifactRequestIdRef.current = requestId;
+
     try {
       const res = await fetch('/api/study-tools', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           type: apiType,
+          requestId,
           topic: topic || activeCourse.name,
           course: `${activeCourse.name} (${activeCourse.code})`,
           courseId: activeCourse.id,
           courseCode: activeCourse.code,
+          userId: user?.id || 4,
+          userName: user?.fullname || 'Sinh viên',
           sources: selectedSources,
           sourceNames: selectedSourceNames,
           level,
@@ -1358,28 +1735,86 @@ function CourseDetailContent() {
       });
       const data = (await res.json()) as StudyToolResponse;
       if (!res.ok) throw new Error(data.error);
+      if (artifactRequestIdRef.current !== requestId) return;
 
-      setArtifactsMap(prev => ({
-        ...prev,
-        [type]: {
-          data: data.data,
-          level,
-          topic: topic || activeCourse.name,
-        },
-      }));
+      const newArtifact: GeneratedArtifact = {
+        id: data.artifactId || `${type}-${Date.now()}`,
+        name: topic || activeCourse.name,
+        data: data.data,
+        level,
+        topic: topic || activeCourse.name,
+      };
+      setArtifactsMap(prev => ({ ...prev, [type]: [...(prev[type] || []), newArtifact] }));
+      setSelectedArtifactIds(prev => ({ ...prev, [type]: newArtifact.id }));
+      setShowArtifactList(false);
     } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') {
+        return;
+      }
       notify(e instanceof Error ? e.message : 'Không thể tạo học liệu.');
     } finally {
-      setArtifactLoading(false);
+      if (artifactAbortRef.current === controller) {
+        artifactAbortRef.current = null;
+        artifactRequestIdRef.current = null;
+        setArtifactLoading(false);
+      }
     }
   };
 
   const resetToolArtifact = (type: string) => {
-    setArtifactsMap(prev => {
-      const updated = { ...prev };
-      delete updated[type];
-      return updated;
+    setSelectedArtifactIds(prev => {
+      const next = { ...prev };
+      delete next[type];
+      return next;
     });
+    setShowArtifactList(true);
+  };
+
+  const renameToolArtifact = async (type: string, artifact: GeneratedArtifact) => {
+    const name = window.prompt('Đặt tên dễ nhớ cho học liệu:', artifact.name);
+    if (!name || name.trim() === artifact.name) return;
+
+    try {
+      const response = await fetch(`/api/learning-artifacts?id=${encodeURIComponent(artifact.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      const responseText = await response.text();
+      let result: { error?: string } = {};
+      try {
+        result = JSON.parse(responseText) as typeof result;
+      } catch {
+        throw new Error(responseText.trim().slice(0, 240) || 'Máy chủ không trả về phản hồi hợp lệ.');
+      }
+      if (!response.ok) throw new Error(result.error || 'Không thể đổi tên học liệu.');
+      setArtifactsMap(prev => ({
+        ...prev,
+        [type]: (prev[type] || []).map(item => item.id === artifact.id ? { ...item, name: name.trim() } : item),
+      }));
+      notify('Đã đổi tên học liệu.');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Không thể đổi tên học liệu.');
+    }
+  };
+
+  const deleteToolArtifact = async (type: string, artifactId: string) => {
+    try {
+      const response = await fetch(`/api/learning-artifacts?id=${encodeURIComponent(artifactId)}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Không thể xóa học liệu.');
+      setArtifactsMap(prev => {
+        const remaining = (prev[type] || []).filter(item => item.id !== artifactId);
+        return remaining.length > 0 ? { ...prev, [type]: remaining } : Object.fromEntries(Object.entries(prev).filter(([key]) => key !== type));
+      });
+      setSelectedArtifactIds(prev => {
+        const next = { ...prev };
+        if (next[type] === artifactId) delete next[type];
+        return next;
+      });
+      notify('Đã xóa học liệu.');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Không thể xóa học liệu.');
+    }
   };
 
   const copyText = async (text: string) => {
@@ -1413,27 +1848,57 @@ function CourseDetailContent() {
           content = await uploadFile.text();
         }
 
+        let uploadedFileUrl: string | undefined = undefined;
         try {
           const formData = new FormData();
           formData.append('file', uploadFile);
           formData.append('title', fileName);
           formData.append('courseId', activeCourse.code);
           if (activeCourse.id) formData.append('moodleCourseId', String(activeCourse.id));
+          formData.append('userId', String(user?.id || 4));
+          formData.append('userName', user?.fullname || 'Sinh viên');
+          formData.append('uploadSource', 'student');
           if (content) formData.append('content', content);
 
-          await fetch('/api/documents/process', {
+          const uploadRes = await fetch('/api/documents/process', {
             method: 'POST',
             body: formData,
           });
+          const uploadData = (await uploadRes.json()) as {
+            material?: { id?: string | number; storage_url?: string; storageUrl?: string };
+            fileUrl?: string;
+          };
+          if (uploadData?.material?.storage_url || uploadData?.material?.storageUrl || uploadData?.fileUrl) {
+            uploadedFileUrl = uploadData.material?.storage_url || uploadData.material?.storageUrl || uploadData.fileUrl;
+          }
+          const materialId = uploadData.material?.id;
+          const sizeStr = (uploadFile.size / (1024 * 1024)).toFixed(1) + ' MB';
+          const newItem: CourseSourceItem = {
+            id: materialId ? `mat-${materialId}` : `upload-${Date.now()}`,
+            name: fileName,
+            type,
+            sizeOrPages: `Tệp đã nạp · ${sizeStr}`,
+            url: uploadedFileUrl,
+            courseCode: activeCourse.code,
+          };
+          setSources(v => [newItem, ...v]);
+          setChecked(v => [true, ...v]);
+          setShowUploadModal(false);
+          setUploadFile(null);
+          setUploadFileTitle('');
+          notify(`Đã nạp thành công tài liệu: "${fileName}"`);
+          return;
         } catch (err) {
           console.warn('Document indexing note:', err);
         }
 
         const sizeStr = (uploadFile.size / (1024 * 1024)).toFixed(1) + ' MB';
         const newItem: CourseSourceItem = {
+          id: `upload-${Date.now()}`,
           name: fileName,
           type,
           sizeOrPages: `Tệp đã nạp · ${sizeStr}`,
+          url: uploadedFileUrl,
           courseCode: activeCourse.code,
         };
 
@@ -1460,12 +1925,34 @@ function CourseDetailContent() {
       }
       const title = uploadUrlTitle.trim() || cleanUrl;
       const newItem: CourseSourceItem = {
+        id: `url-${Date.now()}`,
         name: title,
         type: 'LINK',
         sizeOrPages: 'Liên kết web',
         url: cleanUrl,
         courseCode: activeCourse.code,
       };
+
+      try {
+        const urlUploadResponse = await fetch('/api/documents/process', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title,
+            fileUrl: cleanUrl,
+            content: `[Liên kết web: ${cleanUrl}]`,
+            courseId: activeCourse.code,
+            moodleCourseId: activeCourse.id || 1,
+            userId: user?.id || 4,
+            userName: user?.fullname || 'Sinh viên',
+          }),
+        });
+        const urlUploadData = (await urlUploadResponse.json()) as { material?: { id?: string | number; storage_url?: string; storageUrl?: string }; fileUrl?: string };
+        if (urlUploadData.material?.id) newItem.id = `mat-${urlUploadData.material.id}`;
+      } catch (err) {
+        console.warn('URL document indexing note:', err);
+      }
+
       setSources(v => [newItem, ...v]);
       setChecked(v => [true, ...v]);
       setShowUploadModal(false);
@@ -1479,11 +1966,32 @@ function CourseDetailContent() {
       }
       const title = uploadTextTitle.trim() || 'Ghi chú bài học mới';
       const newItem: CourseSourceItem = {
+        id: `note-${Date.now()}`,
         name: title,
         type: 'TXT',
         sizeOrPages: 'Ghi chú cá nhân',
         courseCode: activeCourse.code,
       };
+
+      try {
+        const noteUploadResponse = await fetch('/api/documents/process', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title,
+            content: uploadTextContent.trim(),
+            courseId: activeCourse.code,
+            moodleCourseId: activeCourse.id || 1,
+            userId: user?.id || 4,
+            userName: user?.fullname || 'Sinh viên',
+          }),
+        });
+        const noteUploadData = (await noteUploadResponse.json()) as { material?: { id?: string | number } };
+        if (noteUploadData.material?.id) newItem.id = `mat-${noteUploadData.material.id}`;
+      } catch (err) {
+        console.warn('Text document indexing note:', err);
+      }
+
       setSources(v => [newItem, ...v]);
       setChecked(v => [true, ...v]);
       setShowUploadModal(false);
@@ -1497,360 +2005,142 @@ function CourseDetailContent() {
     .map((item, i) => ({ item, i }))
     .filter(({ item }) => item.name.toLowerCase().includes(sourceQuery.toLowerCase()));
 
+  const groupedVisibleSources = [
+    {
+      key: 'lms',
+      label: 'Từ LMS',
+      items: visibleSources.filter(({ item }) => !isStudentSource(item)),
+    },
+    {
+      key: 'student',
+      label: 'Sinh viên tải lên',
+      items: visibleSources.filter(({ item }) => isStudentSource(item)),
+    },
+  ];
+
   const displayName = user?.fullname || moodle?.user?.name || 'Student';
+
+  const deletePersonalSource = async (item: CourseSourceItem) => {
+    if (!isStudentSource(item) || !item.id) return;
+    const materialId = item.id.replace(/^(mat|upload|url|note)-/, '');
+    if (!window.confirm(`Xóa tài liệu "${item.name}" khỏi khóa học và bộ nhớ đám mây?`)) return;
+
+    try {
+      const response = await fetch(`/api/documents/process?id=${encodeURIComponent(materialId)}&userId=${user?.id || 4}`, {
+        method: 'DELETE',
+      });
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(result.error || 'Không thể xóa tài liệu.');
+      setSources(prev => prev.filter(source => source.id !== item.id));
+      setChecked(prev => prev.filter((_, index) => sources[index]?.id !== item.id));
+      notify(`Đã xóa tài liệu: "${item.name}"`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Không thể xóa tài liệu.');
+    }
+  };
+
+  const savedUrls = useMemo(() => {
+    return sources.map(s => s.url).filter(Boolean) as string[];
+  }, [sources]);
+
+  const handleAddExternalLinkToPersonalMaterial = async ({ title, url }: { title: string; url: string }) => {
+    const cleanUrl = url.trim();
+    if (!cleanUrl) return;
+
+    const cleanNormUrl = cleanUrl.toLowerCase().replace(/\/+$/, '');
+    const existing = sources.find(s => {
+      if (!s.url) return false;
+      const sNorm = s.url.toLowerCase().replace(/\/+$/, '');
+      return sNorm === cleanNormUrl || cleanNormUrl.startsWith(sNorm) || sNorm.startsWith(cleanNormUrl);
+    });
+
+    if (existing) {
+      notify(`Liên kết "${existing.name}" đã có trong danh sách tài liệu môn học.`);
+      return;
+    }
+
+    const cleanTitle =
+      title.trim() ||
+      (() => {
+        try {
+          return new URL(cleanUrl).hostname.replace(/^www\./, '');
+        } catch {
+          return cleanUrl;
+        }
+      })();
+
+    const tempId = `url-${Date.now()}`;
+    const newItem: CourseSourceItem = {
+      id: tempId,
+      name: cleanTitle,
+      type: 'LINK',
+      sizeOrPages: 'Liên kết web · Cá nhân',
+      url: cleanUrl,
+      courseCode: activeCourse.code,
+    };
+
+    setSources(v => [newItem, ...v]);
+    setChecked(v => [true, ...v]);
+    notify(`Đang lập chỉ mục và lưu "${cleanTitle}" vào tài liệu cá nhân...`);
+
+    try {
+      const res = await fetch('/api/documents/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: cleanTitle,
+          fileUrl: cleanUrl,
+          content: `[Liên kết web nguồn ngoài: ${cleanUrl}]`,
+          courseId: activeCourse.code,
+          moodleCourseId: activeCourse.id || 1,
+          userId: user?.id || 4,
+          userName: user?.fullname || 'Sinh viên',
+        }),
+      });
+      const data = (await res.json()) as { material?: { id?: string | number } };
+      if (data?.material?.id) {
+        setSources(v =>
+          v.map(s => (s.id === tempId || s.url === cleanUrl ? { ...s, id: `mat-${data.material?.id}` } : s))
+        );
+      }
+      notify(`Đã lưu "${cleanTitle}" vào tài liệu cá nhân môn học!`);
+    } catch (err) {
+      console.warn('Save external link error:', err);
+      notify(`Đã lưu "${cleanTitle}" vào danh sách học liệu phiên làm việc.`);
+    }
+  };
 
   return (
     <main className="app-shell course-shell-layout">
-      {/* Sidebar */}
-      <aside className="sidebar">
-        <Link href="/home" className="brand brand-button">
-          <img className="brand-mark" src="/lms-assistant-icon.png" alt="" />
-          <span>LMS Assistant</span>
-        </Link>
-
-        <nav aria-label="Điều hướng chính">
-          <p className="nav-label">KHÔNG GIAN HỌC</p>
-
-          <Link href="/home" className="nav-item">
-            <span>⌂</span>
-            <span>Tổng quan</span>
-          </Link>
-
-          <button className="nav-item active">
-            <span>✦</span>
-            <span>Gia sư AI</span>
-          </button>
-
-          <Link href="/home#courses" className="nav-item">
-            <span>▤</span>
-            <span>Khóa học</span>
-          </Link>
-
-          <Link href="/home#library" className="nav-item">
-            <span>◫</span>
-            <span>Thư viện</span>
-          </Link>
-
-          <Link href="/home#practice" className="nav-item">
-            <span>◎</span>
-            <span>Luyện tập</span>
-          </Link>
-
-          <p className="nav-label second">DÀNH CHO GIẢNG VIÊN</p>
-          <Link href="/home?tab=teacher" className="nav-item" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <GraduationCap size={16} />
-            <span>Góc Giảng Viên</span>
-          </Link>
-
-          <p className="nav-label second">KHÓA HỌC MOODLE</p>
-
-          {allCourses.length === 0 ? (
-            <div style={{ padding: '0.5rem 1rem', fontSize: '12px', color: '#94a3b8' }}>
-              Chưa có khóa học nào
-            </div>
-          ) : (
-            allCourses.map(c => (
-              <button
-                key={c.code}
-                className={`nav-item course-link ${activeCourse.code.toLowerCase() === c.code.toLowerCase() ? 'active' : ''}`}
-                onClick={() => {
-                  router.replace(
-                    `/course?code=${encodeURIComponent(c.code)}&name=${encodeURIComponent(c.name)}&id=${c.id ?? ''}`
-                  );
-                }}
-              >
-                <i style={{ background: c.color }}><BookOpen size={13} /></i>
-                <span>
-                  {c.name}
-                  <small>{c.code}</small>
-                </span>
-              </button>
-            ))
-          )}
-        </nav>
-
-        <div className="sidebar-bottom">
-          <div className="streak">
-            <Flame size={18} style={{ color: '#f97316' }} />
-            <div>
-              <strong>7 ngày</strong>
-              <small>Chuỗi học tập</small>
-            </div>
-            <b>+2</b>
-          </div>
-
-          <button className="profile" onClick={() => setProfile(true)}>
-            <span className="profile-avatar">
-              {user?.avatarUrl ? (
-                <img src={user.avatarUrl} alt="" />
-              ) : (
-                displayName.slice(0, 2).toUpperCase()
-              )}
-            </span>
-            <div>
-              <strong>{displayName}</strong>
-              <small>{user?.username || 'Sinh viên LMS'}</small>
-            </div>
-            <b>•••</b>
-          </button>
-        </div>
-      </aside>
+      <CourseTopBar
+        search={search}
+        onSearchChange={setSearch}
+        searchRef={searchRef}
+        syncing={syncing}
+        onSync={() => void syncMoodleData(true)}
+        notifications={notifications}
+        onToggleNotifications={() => setNotifications(!notifications)}
+        onCloseNotifications={() => setNotifications(false)}
+        notificationPermission={notificationPermission}
+        onRequestNotificationPermission={undefined}
+        deadlines={moodle?.deadlines}
+        user={user}
+        displayName={displayName}
+        onOpenProfile={() => setProfile(true)}
+      />
 
       {/* Main content */}
       <section className="content course-content">
-        <header className="topbar course-topbar">
-          <Link href="/home" className="mobile-logo">
-            n
-          </Link>
-
-          <div className="global-search">
-            <label className="search">
-              <Search size={14} style={{ opacity: 0.7 }} />
-              <input
-                ref={searchRef}
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Tìm khóa học, tài liệu..."
-              />
-              <kbd>⌘ K</kbd>
-            </label>
-          </div>
-
-          <div className="top-actions">
-            <button
-              aria-label="Thông báo"
-              className="icon-button"
-              onClick={() => setNotifications(!notifications)}
-            >
-              <Sparkles size={16} /><i />
-            </button>
-            <button
-              className={`sync ${syncing ? 'syncing' : ''}`}
-              onClick={() => void syncMoodleData()}
-              title="Đồng bộ lại tài liệu từ LMS"
-            >
-              <RotateCcw size={13} />
-              <span>{syncing ? 'Đang tải…' : 'Đồng bộ LMS'}</span>
-            </button>
-            <Link href="/home" className="sync">
-              <span>←</span>
-              <span>Trang chủ</span>
-            </Link>
-          </div>
-
-          {notifications && (
-            <div className="notification-popover">
-              <header>
-                <strong>Thông báo</strong>
-                <button onClick={() => setNotifications(false)}>×</button>
-              </header>
-              {(moodle?.deadlines ?? []).length > 0 ? (
-                (moodle?.deadlines ?? []).slice(0, 4).map(d => {
-                  const date = new Date(d.timestamp);
-                  return (
-                    <div key={d.id}>
-                      <span className="purple"><FileText size={14} /></span>
-                      <section>
-                        <b>{d.name}</b>
-                        <small>
-                          {d.courseName} · hạn {date.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                        </small>
-                      </section>
-                    </div>
-                  );
-                })
-              ) : (
-                <div style={{ padding: '0.75rem 1rem', fontSize: '13px', color: '#94a3b8' }}>
-                  Không có bài tập hoặc thông báo mới từ LMS.
-                </div>
-              )}
-            </div>
-          )}
-        </header>
 
         {/* Course Detail Page Body */}
         {isTeacherCourse ? (
           <div className={`workspace-page course-workspace teacher-workspace fade-in ${teacherTab === 'assistant' ? 'assistant-tab-active' : ''}`}>
-            <div
-              className={`workspace-title course-workspace-title ${teacherTab === 'assistant' ? 'compact-assistant-header' : ''}`}
-              style={{
-                marginBottom: teacherTab === 'assistant' ? '4px' : '1.5rem',
-                paddingBottom: teacherTab === 'assistant' ? '0px' : '4px',
-              }}
-            >
-              {teacherTab === 'assistant' ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                  <span className="eyebrow" style={{ margin: 0, fontSize: '10px' }}>BÀN LÀM VIỆC GIẢNG VIÊN</span>
-                  <span
-                    style={{
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      padding: '1px 6px',
-                      borderRadius: '10px',
-                      background: 'rgba(124, 109, 242, 0.35)',
-                      color: '#e0d8ff',
-                      border: '1px solid rgba(124, 109, 242, 0.5)',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                    }}
-                  >
-                    <GraduationCap size={11} />
-                    <span>Vai trò: Giảng viên</span>
-                  </span>
-                  <span style={{ color: 'rgba(255, 255, 255, 0.25)' }}>|</span>
-                  <h1 style={{ margin: 0, fontSize: '1.05rem', lineHeight: 1.2, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                    {activeCourse.name}
-                  </h1>
-                  {allCourses.length > 0 && (
-                    <div
-                      style={{
-                        position: 'relative',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        cursor: 'pointer',
-                      }}
-                      title="Chuyển nhanh khóa học"
-                    >
-                      <button
-                        type="button"
-                        style={{
-                          width: '20px',
-                          height: '20px',
-                          borderRadius: '4px',
-                          background: 'rgba(124, 109, 242, 0.15)',
-                          border: '1px solid rgba(124, 109, 242, 0.35)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: '#cfc8ff',
-                          cursor: 'pointer',
-                          padding: 0,
-                          transition: 'all 0.2s ease',
-                        }}
-                        aria-label="Chuyển nhanh khóa học"
-                      >
-                        <ChevronDown size={13} />
-                      </button>
-                      <select
-                        value={activeCourse.code}
-                        onChange={e => {
-                          const targetCode = e.target.value;
-                          const target = allCourses.find(c => c.code.toLowerCase() === targetCode.toLowerCase());
-                          if (target) {
-                            router.replace(
-                              `/course?code=${encodeURIComponent(target.code)}&name=${encodeURIComponent(target.name)}&id=${target.id ?? ''}`
-                            );
-                          }
-                        }}
-                        style={{
-                          position: 'absolute',
-                          inset: 0,
-                          opacity: 0,
-                          width: '100%',
-                          height: '100%',
-                          cursor: 'pointer',
-                        }}
-                        title="Chuyển nhanh khóa học"
-                      >
-                        {allCourses.map(c => (
-                          <option key={c.code} value={c.code}>
-                            {c.name} ({c.code})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  <span style={{ fontSize: '11px', color: '#9894ad' }}>· Mã môn: {activeCourse.code || 'LMS'}</span>
-                </div>
-              ) : (
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                    <span className="eyebrow" style={{ margin: 0 }}>BÀN LÀM VIỆC GIẢNG VIÊN</span>
-                    <span
-                      style={{
-                        fontSize: '10px',
-                        fontWeight: 700,
-                        padding: '1px 6px',
-                        borderRadius: '10px',
-                        background: 'rgba(124, 109, 242, 0.35)',
-                        color: '#e0d8ff',
-                        border: '1px solid rgba(124, 109, 242, 0.5)',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                      }}
-                    >
-                      <GraduationCap size={11} />
-                      <span>Vai trò: Giảng viên</span>
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                    <h1 style={{ margin: 0 }}>{activeCourse.name}</h1>
-                    {allCourses.length > 0 && (
-                      <div
-                        style={{
-                          position: 'relative',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          cursor: 'pointer',
-                        }}
-                        title="Chuyển nhanh khóa học"
-                      >
-                        <button
-                          type="button"
-                          style={{
-                            width: '24px',
-                            height: '24px',
-                            borderRadius: '6px',
-                            background: 'rgba(124, 109, 242, 0.15)',
-                            border: '1px solid rgba(124, 109, 242, 0.35)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: '#cfc8ff',
-                            cursor: 'pointer',
-                            padding: 0,
-                            transition: 'all 0.2s ease',
-                          }}
-                          aria-label="Chuyển nhanh khóa học"
-                        >
-                          <ChevronDown size={14} />
-                        </button>
-                        <select
-                          value={activeCourse.code}
-                          onChange={e => {
-                            const targetCode = e.target.value;
-                            const target = allCourses.find(c => c.code.toLowerCase() === targetCode.toLowerCase());
-                            if (target) {
-                              router.replace(
-                                `/course?code=${encodeURIComponent(target.code)}&name=${encodeURIComponent(target.name)}&id=${target.id ?? ''}`
-                              );
-                            }
-                          }}
-                          style={{
-                            position: 'absolute',
-                            inset: 0,
-                            opacity: 0,
-                            width: '100%',
-                            height: '100%',
-                            cursor: 'pointer',
-                          }}
-                          title="Chuyển nhanh khóa học"
-                        >
-                          {allCourses.map(c => (
-                            <option key={c.code} value={c.code}>
-                              {c.name} ({c.code})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-                  <p>Mã môn: {activeCourse.code || 'LMS'}</p>
-                </div>
-              )}
-            </div>
+            <CourseHeader
+              activeCourse={activeCourse}
+              allCourses={allCourses}
+              isTeacher={true}
+              onSelectCourse={handleCourseChange}
+            />
 
             <TeacherPortal
               courses={allCourses}
@@ -1865,101 +2155,24 @@ function CourseDetailContent() {
           </div>
         ) : (
           <div className="workspace-page course-workspace student-workspace fade-in">
-            <div
-              className="workspace-title course-workspace-title compact-assistant-header"
-              style={{
-                marginBottom: '4px',
-                paddingBottom: '0px',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <span className="eyebrow" style={{ margin: 0, fontSize: '10px' }}>
-                  KHÔNG GIAN MÔN HỌC &amp; GIA SƯ AI
-                </span>
-                <span
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 700,
-                    padding: '1px 6px',
-                    borderRadius: '10px',
-                    background: 'rgba(255, 255, 255, 0.08)',
-                    color: '#cbd5e1',
-                    border: '1px solid rgba(255, 255, 255, 0.15)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                  }}
-                >
-                  <BookOpen size={11} />
-                  <span>Vai trò: Học viên</span>
-                </span>
-                <span style={{ color: 'rgba(255, 255, 255, 0.25)' }}>|</span>
-                <h1 style={{ margin: 0, fontSize: '1.05rem', lineHeight: 1.2, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  {activeCourse.name}
-                </h1>
-                {allCourses.length > 0 && (
-                  <div
-                    style={{
-                      position: 'relative',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    }}
-                    title="Chuyển nhanh khóa học"
-                  >
-                    <button
-                      type="button"
-                      style={{
-                        width: '20px',
-                        height: '20px',
-                        borderRadius: '4px',
-                        background: 'rgba(124, 109, 242, 0.15)',
-                        border: '1px solid rgba(124, 109, 242, 0.35)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: '#cfc8ff',
-                        cursor: 'pointer',
-                        padding: 0,
-                        transition: 'all 0.2s ease',
-                      }}
-                      aria-label="Chuyển nhanh khóa học"
-                    >
-                      <ChevronDown size={13} />
-                    </button>
-                    <select
-                      value={activeCourse.code}
-                      onChange={e => {
-                        const target = allCourses.find(c => c.code === e.target.value);
-                        if (target) {
-                          router.replace(
-                            `/course?code=${encodeURIComponent(target.code)}&name=${encodeURIComponent(target.name)}&id=${target.id ?? ''}`
-                          );
-                        }
-                      }}
-                      style={{
-                        position: 'absolute',
-                        inset: 0,
-                        opacity: 0,
-                        width: '100%',
-                        height: '100%',
-                        cursor: 'pointer',
-                      }}
-                      title="Chuyển nhanh khóa học"
-                    >
-                      {allCourses.map(c => (
-                        <option key={c.code} value={c.code}>
-                          {c.name} ({c.code})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                <span style={{ fontSize: '11px', color: '#9894ad' }}>· Mã môn: {activeCourse.code || 'Moodle'}</span>
-              </div>
-            </div>
+            <CourseHeader
+              activeCourse={activeCourse}
+              allCourses={allCourses}
+              isTeacher={false}
+              onSelectCourse={handleCourseChange}
+            />
 
           <div className={`tutor-layout ${isSourcePanelCollapsed ? 'source-collapsed' : ''}`}>
+            {/* Backdrop for source drawer on narrow/half screens */}
+            {!isSourcePanelCollapsed && (
+              <div
+                className="source-drawer-backdrop"
+                onClick={() => setIsSourcePanelCollapsed(true)}
+                title="Đóng bảng tài liệu (Esc)"
+                aria-label="Đóng bảng tài liệu"
+              />
+            )}
+
             {/* Source panel */}
             <aside className={`source-panel ${isSourcePanelCollapsed ? 'collapsed' : ''}`}>
               <div className="source-panel-header">
@@ -1999,81 +2212,76 @@ function CourseDetailContent() {
                     Chưa có tài liệu nào trong khóa học này. Hãy nhấn "Thêm nguồn tài liệu" bên dưới hoặc đồng bộ từ Moodle.
                   </div>
                 ) : (
-                  visibleSources.map(({ item, i }) => {
-                    const badge = getSourceBadge(item.type, item.name);
-                    return (
-                      <label className="source-item" key={`${item.name}-${i}`}>
-                        <input
-                          type="checkbox"
-                          checked={checked[i] ?? true}
-                          onChange={() =>
-                            setChecked(v => v.map((x, n) => (n === i ? !x : x)))
-                          }
-                        />
-                        <span className={`file-badge ${badge.className}`}>{badge.label}</span>
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {item.url ? (
-                            <a
-                              href={item.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={e => e.stopPropagation()}
-                              style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                              title="Mở tài liệu gốc"
-                            >
-                              <span>{item.name}</span>
-                              <ExternalLink size={12} style={{ opacity: 0.7 }} />
-                            </a>
-                          ) : (
-                            item.name
-                          )}
-                          <small>
-                            {item.type === 'LINK' ? 'Liên kết Web' : item.type}
-                          </small>
-                        </span>
-                      </label>
-                    );
-                  })
+                  groupedVisibleSources.map(group => (
+                    group.items.length > 0 && (
+                      <div className="source-group" key={group.key}>
+                        <div className="source-group-heading">
+                          <span>{group.label}</span>
+                          <small>{group.items.length}</small>
+                        </div>
+                        {group.items.map(({ item, i }) => {
+                          const badge = getSourceBadge(item.type, item.name);
+                          return (
+                            <label className={`source-item ${isStudentSource(item) ? 'student-source-item' : ''}`} key={`${item.name}-${i}`}>
+                              <input
+                                type="checkbox"
+                                checked={checked[i] ?? true}
+                                onChange={() =>
+                                  setChecked(v => v.map((x, n) => (n === i ? !x : x)))
+                                }
+                              />
+                              <span className={`file-badge ${isStudentSource(item) ? (item.type === 'LINK' ? 'link-badge' : 'student-file-badge') : badge.className}`}>
+                                {isStudentSource(item) ? (item.type === 'LINK' ? <Globe size={13} /> : <FileText size={13} />) : badge.label}
+                              </span>
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', fontSize: isStudentSource(item) ? '11px' : undefined, lineHeight: isStudentSource(item) ? 1.3 : undefined }}>
+                                {item.url ? (
+                                  <a
+                                    href={item.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={e => e.stopPropagation()}
+                                    style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: isStudentSource(item) ? '11px' : undefined }}
+                                    title="Mở tài liệu gốc"
+                                  >
+                                    <span>{item.name}</span>
+                                    <ExternalLink size={12} style={{ opacity: 0.7 }} />
+                                  </a>
+                                ) : (
+                                  item.name
+                                )}
+                                {!isStudentSource(item) ? (
+                                  <small>{item.type === 'LINK' ? 'Liên kết Web' : item.type}</small>
+                                ) : (
+                                  <small>{item.type === 'LINK' ? 'Liên kết Web · Cá nhân' : (item.sizeOrPages || 'Tài liệu cá nhân')}</small>
+                                )}
+                              </span>
+                              {isStudentSource(item) && (
+                                <button
+                                  type="button"
+                                  className="source-delete-btn"
+                                  onClick={event => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    void deletePersonalSource(item);
+                                  }}
+                                  title="Xóa tài liệu cá nhân"
+                                  aria-label={`Xóa ${item.name}`}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              )}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )
+                  ))
                 )}
 
                 <button className="add-source" onClick={handleAddSource} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                   <Plus size={15} />
                   Thêm nguồn tài liệu (PDF, Word, Web)
                 </button>
-              </div>
-
-              <div className="source-panel-footer">
-                <div
-                  className={`grounded interactive-switch ${allowExternalSource ? 'external-on' : ''}`}
-                  onClick={() => {
-                    setAllowExternalSource(prev => {
-                      const next = !prev;
-                      notify(
-                        next
-                          ? 'Đã bật: Cho phép liên hệ kiến thức thực tiễn ngoài giáo trình'
-                          : 'Đã bật: Chế độ bám sát nghiêm ngặt tài liệu môn học'
-                      );
-                      return next;
-                    });
-                  }}
-                  style={{ cursor: 'pointer' }}
-                  title="Nhấp để bật/tắt quyền dùng nguồn kiến thức mở rộng bên ngoài"
-                >
-                  <div className="grounded-header">
-                    <div className="grounded-header-left">
-                      {allowExternalSource ? <Globe size={15} style={{ color: '#38bdf8' }} /> : <Lock size={15} style={{ color: '#94a3b8' }} />}
-                      <strong className="grounded-title">{allowExternalSource ? 'Nguồn mở rộng' : 'Bám sát tài liệu'}</strong>
-                    </div>
-                    <span className={`unified-status-chip ${allowExternalSource ? 'on' : 'off'}`}>
-                      {allowExternalSource ? 'BẬT' : 'TẮT'}
-                    </span>
-                  </div>
-                  <p className="grounded-subtitle">
-                    {allowExternalSource
-                      ? 'AI kết hợp giáo trình với kiến thức thực tiễn và công nghệ hiện đại.'
-                      : 'AI phân tích nghiêm ngặt chỉ dựa trên các tài liệu đã chọn.'}
-                  </p>
-                </div>
               </div>
             </aside>
 
@@ -2089,8 +2297,8 @@ function CourseDetailContent() {
                       title="Mở danh sách tài liệu môn học"
                       style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                     >
-                      <Folder size={14} />
-                      <span></span>
+                      <Folder size={14} style={{ color: '#a78bfa' }} />
+                      <span className="expand-source-text">Nguồn tài liệu</span>
                       <span className="source-count-badge">{selectedSourceNames.length}</span>
                     </button>
                   )}
@@ -2197,7 +2405,11 @@ function CourseDetailContent() {
                           </span>
                         )}
                         <div id={`chat-msg-${i}`} style={{ minWidth: 0, width: '100%' }}>
-                          <MarkdownRenderer content={m.text} />
+                          <MarkdownRenderer
+                            content={m.text}
+                            onAddMaterial={handleAddExternalLinkToPersonalMaterial}
+                            savedUrls={savedUrls}
+                          />
                           {(() => {
                             if (!m.sources || m.sources.length === 0) return null;
                             const externalSources = m.sources.filter(s => {
@@ -2216,21 +2428,47 @@ function CourseDetailContent() {
                                   const cleanName = rawName.replace(/^(▤|➕|\+\s*|\[Mở rộng\])/, '').trim();
                                   const searchTarget = cleanName.replace(/^(Kiểm chứng|Nguồn mở rộng):\s*/i, '');
                                   const url = isObj && s.url ? s.url : `https://www.google.com/search?q=${encodeURIComponent(searchTarget)}`;
+                                  const cleanNorm = url.trim().toLowerCase().replace(/\/+$/, '');
+                                  const isSaved = Boolean(
+                                    savedUrls.some(u => {
+                                      const norm = u.trim().toLowerCase().replace(/\/+$/, '');
+                                      return norm === cleanNorm || cleanNorm.startsWith(norm) || norm.startsWith(cleanNorm);
+                                    })
+                                  );
 
                                   return (
-                                    <a
-                                      key={`${cleanName}-${idx}`}
-                                      className="citation-pill external-citation"
-                                      href={url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      title="Nhấp để chuyển đến nguồn ngoài đối chiếu & kiểm chứng thông tin"
-                                      style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                                    >
-                                      <Globe size={12} style={{ color: '#38bdf8' }} />
-                                      <span className="citation-text">{cleanName}</span>
-                                      <ExternalLink size={10} style={{ opacity: 0.7 }} />
-                                    </a>
+                                    <div key={`${cleanName}-${idx}`} className="citation-pill-merged">
+                                      <a
+                                        className="citation-link"
+                                        href={url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        title={`Mở nguồn ngoài đối chiếu & kiểm chứng: ${url}`}
+                                      >
+                                        <Globe size={12} style={{ color: '#38bdf8', flexShrink: 0 }} />
+                                        <span className="citation-text">{cleanName}</span>
+                                        <ExternalLink size={10} style={{ opacity: 0.7, flexShrink: 0 }} />
+                                      </a>
+                                      <span className="citation-divider" />
+                                      <button
+                                        type="button"
+                                        onClick={() => handleAddExternalLinkToPersonalMaterial({ title: cleanName, url })}
+                                        disabled={isSaved}
+                                        className={`citation-action-btn ${isSaved ? 'saved' : ''}`}
+                                        title={isSaved ? 'Đã có trong tài liệu môn học' : `Thêm "${cleanName}" vào tài liệu cá nhân`}
+                                      >
+                                        {isSaved ? (
+                                          <>
+                                            <Check size={11} style={{ flexShrink: 0 }} />
+                                            <span>Đã lưu</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <span>+</span>
+                                          </>
+                                        )}
+                                      </button>
+                                    </div>
                                   );
                                 })}
                               </div>
@@ -2391,6 +2629,36 @@ function CourseDetailContent() {
                     />
                     <div className="chat-compose-footer">
                       <div className="chat-compose-chips">                        
+                        {/* External Sources Toggle Chip */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAllowExternalSource(prev => {
+                              const next = !prev;
+                              notify(
+                                next
+                                  ? 'Đã bật: Cho phép liên hệ kiến thức thực tiễn ngoài giáo trình'
+                                  : 'Đã bật: Chế độ bám sát nghiêm ngặt tài liệu môn học'
+                              );
+                              return next;
+                            });
+                          }}
+                          className={`mode-indicator-chip external-source-chip ${allowExternalSource ? 'active-external' : ''}`}
+                          title={
+                            allowExternalSource
+                              ? 'Chế độ mở rộng: AI kết hợp giáo trình với kiến thức thực tiễn ngoài giáo trình (Bấm để chuyển sang Bám sát tài liệu)'
+                              : 'Chế độ bám sát: AI phân tích nghiêm ngặt chỉ dựa trên các tài liệu đã chọn (Bấm để bật Nguồn mở rộng)'
+                          }
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                        >
+                          {allowExternalSource ? (
+                            <Globe size={13} style={{ color: '#38bdf8' }} />
+                          ) : (
+                            <Lock size={13} style={{ color: '#94a3b8' }} />
+                          )}
+                          <span>{allowExternalSource ? 'Nguồn ngoài: BẬT' : 'Bám sát tài liệu'}</span>
+                        </button>
+
                         {/* Answer Style Selector (Concise vs Detailed) */}
                         <button
                           type="button"
@@ -2474,23 +2742,73 @@ function CourseDetailContent() {
                       selectedSources={sources.filter((_, i) => checked[i])}
                       allowExternalSource={allowExternalSource}
                       selectedModel={selectedModel}
+                      hasLmsGrades={courseExamResults.length > 0}
                       initialMode={quizInitialMode}
                       initialWeakTopics={quizInitialTopics}
                       notify={notify}
                     />
                   ) : (
-                    <StudyArtifact
-                      key={`study-${tool}-${activeCourse.id}-${activeCourse.code}`}
-                      type={tool}
-                      artifact={artifactsMap[tool] ?? null}
-                      courseTitle={activeCourse.name}
-                      loading={artifactLoading}
-                      selectedSourcesCount={selectedSourceNames.length}
-                      onGenerate={(level, customTopic, ext) => void generateToolArtifact(tool, level, customTopic, ext)}
-                      onReset={() => resetToolArtifact(tool)}
-                      copyText={copyText}
-                      notify={notify}
-                    />
+                    <div className={`artifact-browser ${showArtifactList ? 'with-list' : 'focus-mode'}`}>
+                      {(artifactsMap[tool] || []).length > 0 && showArtifactList && (
+                        <aside className="artifact-list" aria-label="Danh sách học liệu đã lưu">
+                          <div className="artifact-list-heading">
+                            <span>Học liệu đã lưu</span>
+                            <small>{(artifactsMap[tool] || []).length}</small>
+                          </div>
+                          {(artifactsMap[tool] || []).map((item, index) => (
+                            <div
+                              key={item.id}
+                              className={`artifact-list-item ${selectedArtifactIds[tool] === item.id ? 'selected' : ''}`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedArtifactIds(prev => ({ ...prev, [tool]: item.id }));
+                                  setShowArtifactList(false);
+                                }}
+                                className="artifact-list-select"
+                              >
+                                <span>{item.name || item.topic || `${tool} ${index + 1}`}</span>
+                                <small>{item.level === 'simple' ? 'Cơ bản' : item.level === 'complex' ? 'Chuyên sâu' : 'Tiêu chuẩn'}</small>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void deleteToolArtifact(tool, item.id)}
+                                title="Xóa học liệu"
+                                aria-label={`Xóa ${item.name || item.topic || `${tool} ${index + 1}`}`}
+                                className="artifact-list-delete"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void renameToolArtifact(tool, item)}
+                                title="Đổi tên học liệu"
+                                aria-label={`Đổi tên ${item.name || item.topic || `${tool} ${index + 1}`}`}
+                                className="artifact-list-rename"
+                              >
+                                <Pencil size={13} />
+                              </button>
+                            </div>
+                          ))}
+                        </aside>
+                      )}
+                      <main className="artifact-browser-content">
+                        <StudyArtifact
+                        key={`study-${tool}-${activeCourse.id}-${activeCourse.code}`}
+                        type={tool}
+                        artifact={(artifactsMap[tool] || []).find(item => item.id === selectedArtifactIds[tool]) ?? null}
+                        courseTitle={activeCourse.name}
+                        loading={artifactLoading}
+                        selectedSourcesCount={selectedSourceNames.length}
+                        onGenerate={(level, customTopic, ext) => void generateToolArtifact(tool, level, customTopic, ext)}
+                        onReset={() => resetToolArtifact(tool)}
+                        onStop={stopArtifactGeneration}
+                        copyText={copyText}
+                        notify={notify}
+                        />
+                      </main>
+                    </div>
                   )}
                 </div>
               )}
@@ -2537,10 +2855,13 @@ function CourseDetailContent() {
                   <ShieldCheck size={14} />
                   Thông tin tài khoản
                 </button>
-                <a href="/login" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <button
+                  onClick={handleLogout}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#ef4444' }}
+                >
                   <ExternalLink size={14} />
-                  Đăng nhập lại
-                </a>
+                  Đăng xuất
+                </button>
               </div>
             </div>
           </section>
@@ -2548,21 +2869,22 @@ function CourseDetailContent() {
       )}
 
       {/* Grade History Popup Modal (Strictly for this course) */}
-      {showGradeHistory && (
+      {showGradeHistory && mounted && createPortal(
         <div
           className="grade-modal-overlay"
           onClick={() => setShowGradeHistory(false)}
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(5, 4, 15, 0.78)',
+            background: 'rgba(5, 4, 15, 0.82)',
             backdropFilter: 'blur(8px)',
-            zIndex: 9999,
+            zIndex: 100000,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             padding: '1.25rem',
             animation: 'fadeIn 0.2s ease',
+            overscrollBehavior: 'contain',
           }}
         >
           <div
@@ -2579,6 +2901,7 @@ function CourseDetailContent() {
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',
+              overscrollBehavior: 'contain',
             }}
           >
             {/* Modal Header */}
@@ -2678,6 +3001,7 @@ function CourseDetailContent() {
                 gap: '0.9rem',
                 flex: '1 1 auto',
                 minHeight: 0,
+                overscrollBehavior: 'contain',
               }}
             >
               {courseExamResults.length === 0 ? (
@@ -2924,25 +3248,27 @@ function CourseDetailContent() {
               </span>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Activity / Homework / Exams Modal (Simplified) */}
-      {showActivityModal && (
+      {showActivityModal && mounted && createPortal(
         <div
           className="grade-modal-overlay"
           onClick={() => setShowActivityModal(false)}
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(5, 4, 15, 0.78)',
+            background: 'rgba(5, 4, 15, 0.82)',
             backdropFilter: 'blur(8px)',
-            zIndex: 9999,
+            zIndex: 100000,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             padding: '1.25rem',
             animation: 'fadeIn 0.2s ease',
+            overscrollBehavior: 'contain',
           }}
         >
           <div
@@ -3371,11 +3697,12 @@ function CourseDetailContent() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Student Document & Resource Upload Modal */}
-      {showUploadModal && (
+      {showUploadModal && mounted && createPortal(
         <div
           className="teacher-modal-backdrop"
           onClick={() => {
@@ -3781,7 +4108,8 @@ function CourseDetailContent() {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Quiz Analysis Diagnosis Modal */}
@@ -3793,6 +4121,19 @@ function CourseDetailContent() {
         error={analysisError}
         onRetry={() => selectedExamResult && handleAskAiAboutGrade(selectedExamResult, false)}
         onReanalyze={() => selectedExamResult && handleAskAiAboutGrade(selectedExamResult, true)}
+        onDelete={async () => {
+          if (!currentAnalysis?.id) return;
+          const userId = user?.id || 4;
+          const response = await fetch(
+            `/api/learning-artifacts?id=${encodeURIComponent(currentAnalysis.id)}&userId=${userId}&artifactType=quiz_analysis`,
+            { method: 'DELETE' },
+          );
+          const data = (await response.json()) as { error?: string };
+          if (!response.ok) throw new Error(data.error || 'Không thể xóa bản phân tích.');
+          removeStoredAnalysis(currentAnalysis.attemptId);
+          setCurrentAnalysis(null);
+          setAnalysisModalOpen(false);
+        }}
         onStartRemediation={topics => {
           setAnalysisModalOpen(false);
           setQuizInitialMode('targeted');

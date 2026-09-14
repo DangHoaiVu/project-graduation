@@ -103,6 +103,20 @@ export function GradePromptModal({
     } catch {}
   };
 
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
   if (!isOpen || !result || !mounted) return null;
 
   const currentRoute = resolveGradeRoute(result, false, strategy, detailLevel);
@@ -125,6 +139,7 @@ export function GradePromptModal({
         justifyContent: 'center',
         padding: '3.75rem 1.25rem 1.5rem 1.25rem',
         animation: 'fadeIn 0.2s ease',
+        overscrollBehavior: 'contain',
       }}
       onClick={e => {
         if (e.target === e.currentTarget) onClose();
@@ -143,6 +158,7 @@ export function GradePromptModal({
           flexDirection: 'column',
           boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.85), 0 0 35px rgba(124, 109, 242, 0.25)',
           overflow: 'hidden',
+          overscrollBehavior: 'contain',
           color: '#f3f2f8',
         }}
       >
@@ -230,7 +246,9 @@ export function GradePromptModal({
             display: 'flex',
             flexDirection: 'column',
             gap: '1.25rem',
-            flex: 1,
+            flex: '1 1 auto',
+            minHeight: 0,
+            overscrollBehavior: 'contain',
           }}
         >
           {/* Teacher Feedback Banner (if any) */}

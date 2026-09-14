@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Geist } from 'next/font/google';
 import './globals.css';
+import { NotificationManager } from '@/app/components/NotificationManager';
 
 const geist = Geist({ variable: '--font-geist-sans', subsets: ['latin', 'latin-ext'] });
 
@@ -29,5 +30,12 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="vi" className="dark"><body className={geist.variable}>{children}</body></html>;
+  return (
+    <html lang="vi" className="dark">
+      <body className={geist.variable}>
+        <NotificationManager />
+        {children}
+      </body>
+    </html>
+  );
 }

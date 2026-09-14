@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 import { generateText } from '@/models/registry';
 import { getDb } from '@/db';
-import { courses, documents } from '@/db/schema';
-import { eq, ilike, or } from 'drizzle-orm';
+import { personalMaterials } from '@/db/schema';
+import { eq } from 'drizzle-orm';
+import { supabaseAdmin } from '@/lib/supabase';
 import { parseDocumentFromUrl } from '@/lib/document-parser';
 import { retrieveRelevantChunks, formatChunksForPrompt } from '@/lib/rag';
 import { getLatestQuizAnalysis } from '@/lib/learning-artifacts';
+import { getPersonalMaterials } from '@/lib/firebase-data';
 
 interface SourceItem {
   name: string;
@@ -13,13 +15,19 @@ interface SourceItem {
   type?: string;
 }
 
+export interface MatchingPair {
+  left: string;
+  right: string;
+}
+
 export interface QuizQuestion {
   id?: string;
   q: string;
-  type?: 'multiple_choice' | 'true_false' | 'multiple_select';
-  choices: string[];
-  answer?: number; // 0-based index for single / true_false
-  answers?: number[]; // array of 0-based indices for multiple_select
+  type?: 'multiple_choice' | 'true_false' | 'multiple_select' | 'matching' | 'short_answer';
+  choices?: string[];
+  answer?: number | string; // 0-based index for single / true_false, or string for short answer
+  answers?: number[] | string[]; // array of 0-based indices for multiple_select, or acceptable string variants for short_answer
+  pairs?: MatchingPair[]; // array of { left, right } pairs for matching
   explanation: string;
 }
 
@@ -35,7 +43,8 @@ export async function POST(request: Request) {
       sources?: SourceItem[];
       count?: number;
       difficulty?: 'easy' | 'normal' | 'hard';
-      questionType?: 'multiple_choice' | 'true_false' | 'multiple_select' | 'mixed';
+      questionType?: 'multiple_choice' | 'true_false' | 'multiple_select' | 'matching' | 'short_answer' | 'mixed';
+      questionTypes?: Array<'multiple_choice' | 'true_false' | 'multiple_select' | 'matching' | 'short_answer'>;
       generatorMode?: 'comprehensive' | 'targeted';
       focusWeakAreas?: boolean;
       weakTopics?: string[];
@@ -47,8 +56,31 @@ export async function POST(request: Request) {
     const rawCount = typeof body.count === 'number' ? body.count : 10;
     const count = Math.min(50, Math.max(10, rawCount));
 
+    const allKnownTypes: Array<'multiple_choice' | 'true_false' | 'multiple_select' | 'matching' | 'short_answer'> = [
+      'multiple_choice',
+      'true_false',
+      'multiple_select',
+      'matching',
+      'short_answer',
+    ];
+
+    let selectedTypes: Array<'multiple_choice' | 'true_false' | 'multiple_select' | 'matching' | 'short_answer'> = [];
+    if (Array.isArray(body.questionTypes) && body.questionTypes.length > 0) {
+      selectedTypes = body.questionTypes.filter(t => allKnownTypes.includes(t));
+    }
+
+    if (selectedTypes.length === 0) {
+      if (body.questionType === 'mixed') {
+        selectedTypes = [...allKnownTypes];
+      } else if (body.questionType && allKnownTypes.includes(body.questionType as any)) {
+        selectedTypes = [body.questionType as any];
+      } else {
+        selectedTypes = ['multiple_choice'];
+      }
+    }
+
     const difficulty = body.difficulty || 'normal';
-    const questionType = body.questionType || 'multiple_choice';
+    const questionType = body.questionType || (selectedTypes.length === 1 ? selectedTypes[0] : 'mixed');
     const topic = body.topic || 'Kiểm tra kiến thức môn học';
 
     const effectiveSources: SourceItem[] =
@@ -58,51 +90,81 @@ export async function POST(request: Request) {
 
     const effectiveSourceNames = effectiveSources.map(s => s.name);
 
-    // 1. Gather document context from Supabase/Moodle
+    // 1. Gather document context from personal_materials / Moodle
     let documentContext = '';
-    const db = getDb();
     const docMap = new Map<string, string>();
+    const moodleCourseId = Number(body.courseId) || undefined;
 
-    if (db) {
+    if (moodleCourseId) {
       try {
-        let dbDocs: Array<{ id: string; title: string; content: string }> = [];
-        if (body.courseId && typeof body.courseId === 'string' && body.courseId.includes('-')) {
-          dbDocs = await db
-            .select({ id: documents.id, title: documents.title, content: documents.content })
-            .from(documents)
-            .where(eq(documents.courseId, body.courseId))
-            .limit(10);
-        } else if (body.courseCode || body.course) {
-          const matchedCourses = await db
-            .select()
-            .from(courses)
-            .where(
-              or(
-                body.courseCode ? ilike(courses.title, `%${body.courseCode}%`) : undefined,
-                body.course ? ilike(courses.title, `%${body.course.split('(')[0].trim()}%`) : undefined
-              )
-            )
-            .limit(3);
-
-          if (matchedCourses.length > 0) {
-            for (const mc of matchedCourses) {
-              const docs = await db
-                .select({ id: documents.id, title: documents.title, content: documents.content })
-                .from(documents)
-                .where(eq(documents.courseId, mc.id))
-                .limit(5);
-              dbDocs.push(...docs);
+        const mats = await getPersonalMaterials({ moodleCourseId, limit: 10 });
+        if (mats) {
+          for (const mat of mats) {
+            if (mat.storage_url && mat.title && !docMap.has(String(mat.title).toLowerCase())) {
+              try {
+                const text = await parseDocumentFromUrl(String(mat.storage_url), String(mat.title));
+                if (text && text.length > 50) docMap.set(String(mat.title).toLowerCase(), text);
+              } catch {
+                // ignore unavailable material
+              }
             }
           }
         }
+      } catch (firebaseError) {
+        console.warn('Firebase personal_materials query in quiz route:', firebaseError);
+      }
 
-        for (const doc of dbDocs) {
-          if (doc.content && doc.content.length > 50) {
-            docMap.set(doc.title.toLowerCase(), doc.content);
+      if (supabaseAdmin) {
+        try {
+          const { data: mats } = await supabaseAdmin
+            .from('personal_materials')
+            .select('*')
+            .eq('moodle_course_id', moodleCourseId)
+            .limit(10);
+
+          if (mats) {
+            for (const mat of mats) {
+              if (mat.storage_url && !docMap.has(mat.title.toLowerCase())) {
+                try {
+                  const text = await parseDocumentFromUrl(mat.storage_url, mat.title);
+                  if (text && text.length > 50) {
+                    docMap.set(mat.title.toLowerCase(), text);
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+            }
           }
+        } catch (sbErr) {
+          console.warn('Supabase personal_materials query in quiz route:', sbErr);
         }
-      } catch (dbErr) {
-        console.warn('Could not query Supabase documents in quiz route:', dbErr);
+      }
+
+      const db = getDb();
+      if (db && docMap.size === 0) {
+        try {
+          const mats = await db
+            .select()
+            .from(personalMaterials)
+            .where(eq(personalMaterials.moodleCourseId, moodleCourseId))
+            .limit(10);
+
+          for (const mat of mats) {
+            if (mat.storageUrl && !docMap.has(mat.title.toLowerCase())) {
+              try {
+                const text = await parseDocumentFromUrl(mat.storageUrl, mat.title);
+                if (text && text.length > 50) {
+                  docMap.set(mat.title.toLowerCase(), text);
+                }
+              } catch {
+                // ignore
+              }
+            }
+          }
+        } catch (dbErr) {
+          console.warn('Drizzle personal_materials query in quiz route:', dbErr);
+        }
       }
     }
 
@@ -174,15 +236,19 @@ export async function POST(request: Request) {
     }
 
     // Type Prompting
+    const typeDescriptions: Record<string, string> = {
+      multiple_choice: '1. TRẮC NGHIỆM 4 LỰA CHỌN (Single Choice): "type": "multiple_choice", "choices": đúng 4 lựa chọn, "answer": số nguyên 0..3 (1 đáp án đúng duy nhất).',
+      true_false: '2. ĐÚNG / SAI (True/False): "type": "true_false", "choices": ["Đúng", "Sai"], "answer": 0 nếu Đúng, 1 nếu Sai.',
+      multiple_select: '3. CHỌN NHIỀU ĐÁP ÁN (Multiple Select): "type": "multiple_select", "choices": 4-5 lựa chọn, "answers": mảng chứa từ 2 ĐẾN 3 chỉ số đúng (ví dụ [0, 2] hoặc [1, 2, 3]). BẮT BUỘC chỉ có 2 hoặc 3 đáp án đúng, TUYỆT ĐỐI KHÔNG chọn tất cả và KHÔNG chọn chỉ 1.',
+      matching: '4. NỐI CẶP TƯƠNG ỨNG (Matching): "type": "matching", "q": "Yêu cầu nối thuật ngữ với định nghĩa phù hợp...", "pairs": mảng 3 đến 5 cặp [{"left": "Khái niệm A", "right": "Định nghĩa chính xác của A"}, ...]. Vế phải phải tương ứng chuẩn xác với vế trái.',
+      short_answer: '5. TRẢ LỜI NGẮN (Short Answer): "type": "short_answer", "q": "Nội dung câu hỏi yêu cầu điền thuật ngữ/từ khóa/con số ngắn...", "answers": mảng 1 đến 3 biến thể đáp án đúng chấp nhận được (ví dụ ["TCP", "Transmission Control Protocol"]).',
+    };
+
     let typeDesc = '';
-    if (questionType === 'true_false') {
-      typeDesc = 'LOẠI CÂU HỎI: 100% ĐÚNG / SAI (True/False). Mỗi câu có chính xác 2 lựa chọn: ["Đúng", "Sai"], "type": "true_false", "answer": 0 hoặc 1.';
-    } else if (questionType === 'multiple_select') {
-      typeDesc = 'LOẠI CÂU HỎI: 100% CHỌN NHIỀU ĐÁP ÁN ĐÚNG (Multiple Select). Mỗi câu có 4-5 lựa chọn và CÓ TỪ 2-3 ĐÁP ÁN ĐÚNG, "type": "multiple_select", "answers": [0, 2].';
-    } else if (questionType === 'mixed') {
-      typeDesc = 'LOẠI CÂU HỎI: KẾT HỢP ĐA DẠNG. Gồm xen kẽ cả: (1) 4 lựa chọn 1 đáp án đúng ("type": "multiple_choice", "answer": 0..3), (2) Đúng/Sai ("type": "true_false", "choices": ["Đúng", "Sai"], "answer": 0..1), và (3) Chọn nhiều đáp án đúng ("type": "multiple_select", "choices": [...], "answers": [0, 2]).';
+    if (selectedTypes.length === 1) {
+      typeDesc = `LOẠI CÂU HỎI BẮT BUỘC (100%): Hãy tạo 100% câu hỏi theo đúng định dạng sau:\n${typeDescriptions[selectedTypes[0]]}`;
     } else {
-      typeDesc = 'LOẠI CÂU HỎI: 4 LỰA CHỌN (A/B/C/D - Single Choice). Mỗi câu có chính xác 4 lựa chọn khác nhau, "type": "multiple_choice", "answer": 0..3.';
+      typeDesc = `LOẠI CÂU HỎI: HÃY PHÂN BỔ ĐỀU VÀ XEN KẼ CHÍNH XÁC GIỮA ${selectedTypes.length} ĐỊNH DẠNG ĐƯỢC CHỌN SAU ĐÂY:\n${selectedTypes.map(t => typeDescriptions[t]).join('\n')}\nLƯU Ý QUAN TRỌNG: TUYỆT ĐỐI CHỈ TẠO CÂU HỎI THUỘC CÁC ĐỊNH DẠNG ĐÃ CHỌN TRÊN, KHÔNG TẠO DẠNG NGOÀI DANH SÁCH!`;
     }
 
     let contextSection = '';
@@ -231,12 +297,14 @@ ${typeDesc}
 ${externalRule}
 ${adaptiveSection}
 
-QUY TẮC BẮT BUỘC:
-1. Đối với "type": "multiple_choice" (1 đáp án): "choices" có 4 phương án, "answer": số nguyên 0..3.
-2. Đối với "type": "true_false" (Đúng/Sai): "choices": ["Đúng", "Sai"], "answer": 0 (nếu Đúng) hoặc 1 (nếu Sai).
-3. Đối với "type": "multiple_select" (Nhiều đáp án): "choices" có 4-5 phương án, "answers": mảng chứa ít nhất 2 chỉ số đúng (ví dụ [0, 2]).
-4. "explanation": Giải thích ngắn gọn nhưng đủ ý tại sao các đáp án đó đúng/sai.
-5. Trả về đúng JSON object duy nhất có thuộc tính "questions":
+QUY TẮC BẮT BUỘC CHO TỪNG LOẠI CÂU HỎI:
+1. "multiple_choice": "choices" có 4 phương án, "answer": số nguyên 0..3 (1 đáp án đúng).
+2. "true_false": "choices": ["Đúng", "Sai"], "answer": 0 (nếu Đúng) hoặc 1 (nếu Sai).
+3. "multiple_select": "choices" có 4-5 phương án, "answers": mảng chứa từ 2 đến 3 chỉ số đúng (ví dụ [0, 2]). KHÔNG chọn tất cả, KHÔNG chọn chỉ 1.
+4. "matching": "pairs" mảng 3 đến 5 cặp ghép đúng [{"left": "Khái niệm", "right": "Định nghĩa tương ứng"}].
+5. "short_answer": "answers" mảng 1 đến 3 biến thể chuỗi ngắn gọn được chấp nhận.
+6. "explanation": Lời giải thích ngắn gọn nhưng đủ ý khoa học.
+7. Trả về đúng JSON object duy nhất có thuộc tính "questions":
 {
   "questions": [
     {
@@ -255,10 +323,26 @@ QUY TẮC BẮT BUỘC:
     },
     {
       "type": "multiple_select",
-      "q": "Những khẳng định nào sau đây là ĐÚNG? (Chọn nhiều đáp án)",
+      "q": "Những khẳng định nào sau đây là ĐÚNG? (Chọn 2 hoặc 3 đáp án)",
       "choices": ["Lựa chọn A", "Lựa chọn B", "Lựa chọn C", "Lựa chọn D"],
       "answers": [0, 2],
       "explanation": "Giải thích chi tiết..."
+    },
+    {
+      "type": "matching",
+      "q": "Nối các khái niệm ở cột trái với nội dung tương ứng ở cột phải:",
+      "pairs": [
+        { "left": "Khái niệm 1", "right": "Nội dung 1" },
+        { "left": "Khái niệm 2", "right": "Nội dung 2" },
+        { "left": "Khái niệm 3", "right": "Nội dung 3" }
+      ],
+      "explanation": "Giải thích chi tiết..."
+    },
+    {
+      "type": "short_answer",
+      "q": "Giao thức nào hoạt động ở tầng Giao vận cung cấp truyền dữ liệu tin cậy?",
+      "answers": ["TCP", "Transmission Control Protocol"],
+      "explanation": "TCP là giao thức hướng kết nối tin cậy..."
     }
   ]
 }
@@ -280,28 +364,60 @@ Không bao gồm markdown hay văn bản ngoài JSON.`;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const normalized = questionsList.slice(0, count).map((item: any, idx: number) => {
             const rawChoices = item.choices || item.options || [];
-            let qType: 'multiple_choice' | 'true_false' | 'multiple_select' = 'multiple_choice';
 
+            // 1. Matching
+            if (item.type === 'matching' || (Array.isArray(item.pairs) && item.pairs.length >= 2)) {
+              const rawPairs = Array.isArray(item.pairs) ? item.pairs : [];
+              const validPairs = rawPairs
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                .map((p: any) => ({
+                  left: String(p.left || p.question || p.term || '').trim(),
+                  right: String(p.right || p.answer || p.definition || '').trim(),
+                }))
+                .filter((p: { left: string; right: string }) => p.left && p.right);
+
+              if (validPairs.length >= 2) {
+                return {
+                  id: `sq-${idx + 1}-${Date.now()}`,
+                  type: 'matching' as const,
+                  q: item.q || item.questionText || `Nối các cặp khái niệm tương ứng sau:`,
+                  pairs: validPairs,
+                  explanation: item.explanation || '',
+                };
+              }
+            }
+
+            // 2. Short answer
+            if (item.type === 'short_answer' || item.type === 'shortanswer' || item.type === 'short_ans') {
+              const rawAnswers = Array.isArray(item.answers)
+                ? item.answers
+                : Array.isArray(item.acceptedAnswers)
+                ? item.acceptedAnswers
+                : item.answer !== undefined
+                ? [String(item.answer)]
+                : ['Đáp án'];
+              const validAnswers = (rawAnswers as unknown[]).map(s => String(s).trim()).filter(Boolean);
+
+              return {
+                id: `sq-${idx + 1}-${Date.now()}`,
+                type: 'short_answer' as const,
+                q: item.q || item.questionText || `Câu hỏi ${idx + 1}`,
+                answers: validAnswers.length > 0 ? validAnswers : ['Đáp án đúng'],
+                answer: validAnswers[0] || 'Đáp án đúng',
+                explanation: item.explanation || '',
+              };
+            }
+
+            // 3. True / False
             if (
               item.type === 'true_false' ||
               item.type === 'truefalse' ||
               (rawChoices.length === 2 && (rawChoices[0].toLowerCase().includes('đúng') || rawChoices[0].toLowerCase().includes('true')))
             ) {
-              qType = 'true_false';
-            } else if (
-              item.type === 'multiple_select' ||
-              item.type === 'multiselect' ||
-              (Array.isArray(item.answers) && item.answers.length > 1) ||
-              (Array.isArray(item.answer) && item.answer.length > 1)
-            ) {
-              qType = 'multiple_select';
-            }
-
-            if (qType === 'true_false') {
               const ans = typeof item.answer === 'number' ? item.answer : 0;
               return {
                 id: `sq-${idx + 1}-${Date.now()}`,
-                type: 'true_false',
+                type: 'true_false' as const,
                 q: item.q || item.questionText || `Câu hỏi ${idx + 1}`,
                 choices: ['Đúng', 'Sai'],
                 answer: ans === 1 ? 1 : 0,
@@ -309,33 +425,49 @@ Không bao gồm markdown hay văn bản ngoài JSON.`;
               };
             }
 
-            if (qType === 'multiple_select') {
+            // 4. Multiple select
+            if (
+              item.type === 'multiple_select' ||
+              item.type === 'multiselect' ||
+              (Array.isArray(item.answers) && item.answers.length > 1) ||
+              (Array.isArray(item.answer) && item.answer.length > 1)
+            ) {
               const rawAnswers = Array.isArray(item.answers)
                 ? item.answers
                 : Array.isArray(item.answer)
                 ? item.answer
                 : [0, 1];
               const choices = rawChoices.length >= 2 ? rawChoices : ['Lựa chọn A', 'Lựa chọn B', 'Lựa chọn C', 'Lựa chọn D'];
-              const validAnswers = rawAnswers
+              let validAnswers = rawAnswers
                 .map(Number)
                 .filter((n: number) => !isNaN(n) && n >= 0 && n < choices.length);
 
+              // Enforce 2 or 3 correct answers, not all and not 1
+              if (validAnswers.length <= 1) {
+                const remaining = [0, 1, 2, 3].filter(i => i < choices.length && !validAnswers.includes(i));
+                validAnswers = [...validAnswers, remaining[0] ?? 1].slice(0, 2);
+              } else if (validAnswers.length >= choices.length) {
+                validAnswers = validAnswers.slice(0, Math.min(3, choices.length - 1));
+              } else if (validAnswers.length > 3) {
+                validAnswers = validAnswers.slice(0, 3);
+              }
+
               return {
                 id: `sq-${idx + 1}-${Date.now()}`,
-                type: 'multiple_select',
+                type: 'multiple_select' as const,
                 q: item.q || item.questionText || `Câu hỏi ${idx + 1}`,
                 choices,
-                answers: validAnswers.length > 0 ? validAnswers : [0, 1],
+                answers: validAnswers,
                 explanation: item.explanation || '',
               };
             }
 
-            // multiple_choice
+            // 5. Default: Multiple choice (single)
             const choices = rawChoices.length >= 4 ? rawChoices.slice(0, 4) : [...rawChoices, 'Lựa chọn 1', 'Lựa chọn 2'].slice(0, 4);
             const ans = typeof item.answer === 'number' ? item.answer : 0;
             return {
               id: `sq-${idx + 1}-${Date.now()}`,
-              type: 'multiple_choice',
+              type: 'multiple_choice' as const,
               q: item.q || item.questionText || `Câu hỏi ${idx + 1}`,
               choices,
               answer: Math.min(choices.length - 1, Math.max(0, ans)),
@@ -348,6 +480,7 @@ Không bao gồm markdown hay văn bản ngoài JSON.`;
             count: normalized.length,
             difficulty,
             questionType,
+            questionTypes: selectedTypes,
             generatorMode,
             weakTopics: effectiveWeakTopics,
             mode: 'ai',

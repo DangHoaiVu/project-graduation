@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server';
 import { generateText } from '@/models/registry';
 import { getDb } from '@/db';
-import { courses, documents } from '@/db/schema';
-import { eq, ilike, or } from 'drizzle-orm';
+import { personalMaterials, chatSessions } from '@/db/schema';
+import { eq } from 'drizzle-orm';
+import { supabaseAdmin } from '@/lib/supabase';
 import { parseDocumentFromUrl } from '@/lib/document-parser';
 import { retrieveRelevantChunks, formatChunksForPrompt } from '@/lib/rag';
+import { getLearningArtifacts } from '@/lib/learning-artifacts';
+import { getPersonalMaterials } from '@/lib/firebase-data';
+import type { ExamResult } from '@/app/types';
 
 interface ChatHistoryItem {
   role: 'user' | 'ai' | 'model' | 'assistant';
@@ -26,6 +30,9 @@ export async function POST(request: Request) {
       course = '',
       courseCode = '',
       courseId,
+      userId,
+      sessionId,
+      gradebook = [],
       allowExternalSource = false,
       answerStyle = 'concise',
       history = [],
@@ -37,6 +44,9 @@ export async function POST(request: Request) {
       course?: string;
       courseCode?: string;
       courseId?: string | number;
+      userId?: number;
+      sessionId?: string;
+      gradebook?: ExamResult[];
       allowExternalSource?: boolean;
       answerStyle?: 'concise' | 'detailed';
       history?: ChatHistoryItem[];
@@ -54,54 +64,113 @@ export async function POST(request: Request) {
 
     const effectiveSourceNames = effectiveSources.map(s => s.name);
 
-    // 1. Retrieve or extract course documents
+    // 1. Retrieve or extract course documents from personal_materials / Moodle
     let documentContext = '';
+    let artifactContext = '';
+    let gradebookContext = '';
     const relevantDocTitles: string[] = [];
-    const db = getDb();
     const docMap = new Map<string, string>();
+    const moodleCourseId = Number(courseId) || undefined;
 
-    // A. Check Supabase database first
-    if (db) {
+    if (Array.isArray(gradebook) && gradebook.length > 0) {
+      gradebookContext = gradebook
+        .map((result, index) => {
+          const score = `${result.score}/${result.maxScore}`;
+          return `--- ĐIỂM LMS [${index + 1}] ---\nBài: ${result.name}\nĐiểm: ${score}${result.percentage ? ` (${result.percentage})` : ''}\nNhận xét: ${result.feedback || 'Chưa có nhận xét'}\nTrạng thái: ${result.passed === false ? 'Chưa đạt' : result.passed === true ? 'Đạt' : 'Chưa xác định'}`;
+        })
+        .join('\n\n');
+    }
+
+    if (moodleCourseId) {
       try {
-        let dbDocs: Array<{ id: string; title: string; content: string }> = [];
+        const artifacts = await getLearningArtifacts({
+          userId: Number(userId) || 4,
+          moodleCourseId,
+          limit: 100,
+        });
+        if (artifacts.length > 0) {
+          artifactContext = artifacts
+            .map((artifact, index) => {
+              const content = artifact.content_data || artifact.contentData || {};
+              return `--- HỌC LIỆU ĐÃ LƯU [${index + 1}] (${artifact.artifact_type || artifact.artifactType}) ---\n${JSON.stringify(content).slice(0, 12000)}`;
+            })
+            .join('\n\n');
+        }
+      } catch (artifactErr) {
+        console.warn('Could not query learning artifacts in tutor:', artifactErr);
+      }
+    }
 
-        if (courseId && typeof courseId === 'string' && courseId.includes('-')) {
-          dbDocs = await db
-            .select({ id: documents.id, title: documents.title, content: documents.content })
-            .from(documents)
-            .where(eq(documents.courseId, courseId))
-            .limit(10);
-        } else if (courseCode || course) {
-          const matchedCourses = await db
-            .select()
-            .from(courses)
-            .where(
-              or(
-                courseCode ? ilike(courses.title, `%${courseCode}%`) : undefined,
-                course ? ilike(courses.title, `%${course.split('(')[0].trim()}%`) : undefined
-              )
-            )
-            .limit(3);
-
-          if (matchedCourses.length > 0) {
-            for (const mc of matchedCourses) {
-              const docs = await db
-                .select({ id: documents.id, title: documents.title, content: documents.content })
-                .from(documents)
-                .where(eq(documents.courseId, mc.id))
-                .limit(5);
-              dbDocs.push(...docs);
+    if (moodleCourseId) {
+      try {
+        const mats = await getPersonalMaterials({ moodleCourseId, limit: 10 });
+        if (mats) {
+          for (const mat of mats) {
+            if (mat.storage_url && mat.title && !docMap.has(String(mat.title).toLowerCase())) {
+              try {
+                const text = await parseDocumentFromUrl(String(mat.storage_url), String(mat.title));
+                if (text && text.length > 50) docMap.set(String(mat.title).toLowerCase(), text);
+              } catch {
+                // ignore unavailable material
+              }
             }
           }
         }
+      } catch (firebaseError) {
+        console.warn('Firebase personal_materials query in tutor:', firebaseError);
+      }
 
-        for (const doc of dbDocs) {
-          if (doc.content && doc.content.length > 50) {
-            docMap.set(doc.title.toLowerCase(), doc.content);
+      if (supabaseAdmin) {
+        try {
+          const { data: mats } = await supabaseAdmin
+            .from('personal_materials')
+            .select('*')
+            .eq('moodle_course_id', moodleCourseId)
+            .limit(10);
+
+          if (mats) {
+            for (const mat of mats) {
+              if (mat.storage_url && !docMap.has(mat.title.toLowerCase())) {
+                try {
+                  const text = await parseDocumentFromUrl(mat.storage_url, mat.title);
+                  if (text && text.length > 50) {
+                    docMap.set(mat.title.toLowerCase(), text);
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+            }
           }
+        } catch (sbErr) {
+          console.warn('Could not query personal_materials via Supabase in tutor:', sbErr);
         }
-      } catch (dbErr) {
-        console.warn('Could not query Supabase documents:', dbErr);
+      }
+
+      const db = getDb();
+      if (db && docMap.size === 0) {
+        try {
+          const mats = await db
+            .select()
+            .from(personalMaterials)
+            .where(eq(personalMaterials.moodleCourseId, moodleCourseId))
+            .limit(10);
+
+          for (const mat of mats) {
+            if (mat.storageUrl && !docMap.has(mat.title.toLowerCase())) {
+              try {
+                const text = await parseDocumentFromUrl(mat.storageUrl, mat.title);
+                if (text && text.length > 50) {
+                  docMap.set(mat.title.toLowerCase(), text);
+                }
+              } catch {
+                // ignore
+              }
+            }
+          }
+        } catch (dbErr) {
+          console.warn('Could not query personal_materials via Drizzle in tutor:', dbErr);
+        }
       }
     }
 
@@ -114,31 +183,9 @@ export async function POST(request: Request) {
           const extractedText = await parseDocumentFromUrl(src.url, src.name);
           if (extractedText && extractedText.trim() && extractedText.length > currentContent.length) {
             docMap.set(lowerName, extractedText);
-
-            // If Supabase is connected, asynchronously save the extracted text to Supabase
-            if (db) {
-              try {
-                let targetCourseId = (typeof courseId === 'string' && courseId.includes('-')) ? courseId : '';
-                if (!targetCourseId) {
-                  const existingCourses = await db.select().from(courses).limit(1);
-                  if (existingCourses.length > 0) {
-                    targetCourseId = existingCourses[0].id;
-                  }
-                }
-                if (targetCourseId) {
-                  await db.insert(documents).values({
-                    courseId: targetCourseId,
-                    title: src.name,
-                    content: extractedText.slice(0, 1000000),
-                  });
-                }
-              } catch {
-                // background caching error is non-fatal
-              }
-            }
           }
         } catch (parseErr) {
-          console.warn(`Could not extract document from URL ${src.url}:`, parseErr);
+          console.warn(`Could not parse source document ${src.name}:`, parseErr);
         }
       }
     }
@@ -253,12 +300,16 @@ export async function POST(request: Request) {
 - Sử dụng gạch đầu dòng rõ ràng, không giải thích lan man hay dài dòng, giúp sinh viên nắm bắt câu trả lời nhanh chóng.`;
 
     const externalInstruction = allowExternalSource
-      ? `HƯỚNG DẪN TRẢ LỜI KHI BẬT MỞ RỘNG:
+      ? `HƯỚNG DẪN TRẢ LỜI KHI BẬT MỞ RỘNG (EXTERNAL SOURCE MODE - ACTIVE):
 - Lấy các tài liệu môn học làm nền tảng cốt lõi nếu có, đồng thời mở rộng và giải thích toàn diện câu hỏi của sinh viên dựa trên kiến thức chuyên môn thực tế ngành và tra cứu hiện đại.
-- Khi đưa thêm thông tin thực tế ngoài giáo trình, hãy phân tích logic, khách quan và chuyên nghiệp.`
+- TÌM KIẾM & DẪN NGUỒN LIÊN KẾT NGOÀI (EXTERNAL LINK SOURCES - BẮT BUỘC):
+  + Khi nhắc đến bất kỳ công nghệ, framework, thư viện, công cụ lập trình, tiêu chuẩn kỹ thuật hoặc tài liệu tham khảo chính thức nào (ví dụ: Electron, Tauri, Flutter, React, Vue, Docker, MDN, npm, GitHub repo...), hãy chủ động tìm và cung cấp đường dẫn chính thức (official website / documentation).
+  + ĐỊNH DẠNG ĐƯỜNG DẪN: Bắt buộc định dạng liên kết Markdown chuẩn dạng [Tên Trang hoặc Công nghệ](https://đường-dẫn-chính-thức).
+  + TUYỆT ĐỐI KHÔNG để link trong dấu code backtick (\`https://...\`). Hãy luôn dùng cú pháp [Tên](https://...) để sinh viên có thể nhấp mở và lưu trực tiếp vào tài liệu cá nhân.`
       : `HƯỚNG DẪN TRẢ LỜI KHI BÁM SÁT TÀI LIỆU:
 - Phân tích và giải thích dựa trên nội dung tài liệu và các chủ đề chuyên môn của môn học ${subjectName} đã chọn ("${selectedTopicsStr}").
-- Nếu câu hỏi nằm ngoài các nguồn tài liệu đã chọn, thông báo lịch sự theo mẫu hướng dẫn ở trên.`;
+- Nếu câu hỏi nằm ngoài các nguồn tài liệu đã chọn, thông báo lịch sự theo mẫu hướng dẫn ở trên.
+- Nếu sinh viên chủ động hỏi về tài liệu ngoài, trang web chính thức hoặc liên kết tham khảo, hãy cung cấp đường link Markdown [Tên](https://...) tương ứng để hỗ trợ sinh viên.`;
 
     const factualGuardrail = `QUY TẮC BẢO ĐẢM TÍNH XÁC THỰC LỊCH SỬ & SỰ KIỆN (ANTI-HALLUCINATION & FACTUAL ACCURACY - BẮT BUỘC):
 - TUYỆT ĐỐI KHÔNG BỊA ĐẶT hay suy diễn sai lệch về: Mốc thời gian (năm/tháng/ngày), địa điểm tổ chức, nhân vật, số liệu và nội dung các kỳ Đại hội/sự kiện lịch sử (Ví dụ: Đại hội I họp 1935 tại Ma Cao, Đại hội II họp 1951 tại Chiêm Hóa - Tuyên Quang, Đại hội III họp 1960 tại Hà Nội, Đại hội IV họp 1976 tại Hà Nội, Đại hội VI Đổi mới họp 1986 tại Hà Nội, Đại hội XIV họp 1/2026 tại Hà Nội).
@@ -305,9 +356,16 @@ QUY TẮC PHONG CÁCH & TRÌNH BÀY HỌC THUẬT (BẮT BUỘC):
 1. ĐI THẲNG VÀO NỘI DUNG CHUYÊN MÔN: Tuyệt đối KHÔNG mở đầu bằng câu chào hỏi xã giao (như "Chào bạn", "Kính chào bạn", "Xin chào") và KHÔNG kết thúc bằng những câu chúc sáo rỗng. Bắt đầu ngay lập tức bằng nội dung câu trả lời hoặc phân tích chuyên môn.
 2. VĂN PHONG CHUẨN MỰC, SƯ PHẠM: Sử dụng ngôn ngữ khoa học, trang trọng, chính xác, khách quan và mạch lạc. Tuyệt đối không dùng phong cách cợt nhả, suồng sã, mỉa mai hay tiếng lóng mạng xã hội.
 3. TOÁN HỌC: Sử dụng LaTeX chuẩn dạng $công_thức$ (ví dụ: $O(1)$, $O(N^2)$, $N - 1$). Tuyệt đối KHÔNG gõ lệch thành \\$ hay $\\.
-4. BẢNG BIỂU: Khi lập bảng so sánh (Markdown Table), dùng thẻ <br/> để xuống dòng giữa các ý trong cùng một ô. Không đặt code block 3 dấu nháy (\`\`\`) bên trong ô bảng Markdown; hãy đặt code block ở bên ngoài/dưới bảng.`;
+4. BẢNG BIỂU: Khi lập bảng so sánh (Markdown Table), dùng thẻ <br/> để xuống dòng giữa các ý trong cùng một ô. Không đặt code block 3 dấu nháy (\`\`\`) bên trong ô bảng Markdown; hãy đặt code block ở bên ngoài/dưới bảng.
+5. LIÊN KẾT NGUỒN NGOÀI: Mọi liên kết URL dẫn nguồn tham khảo bên ngoài phải viết dưới dạng Markdown [Tên trang hoặc tài liệu](https://...). Tuyệt đối không đặt URL trong dấu backtick \`https://...\`.`;
 
     let contextSection = '';
+    if (gradebookContext.trim()) {
+      contextSection += `ĐIỂM VÀ NHẬN XÉT TỪ GRADEBOOK LMS (NGUỒN ẨN, KHÔNG HIỂN THỊ NHƯ TÀI LIỆU):\n${gradebookContext}\n\n`;
+    }
+    if (artifactContext.trim()) {
+      contextSection += `HỌC LIỆU ĐÃ TẠO VÀ LƯU CHO MÔN HỌC:\n${artifactContext}\n\n`;
+    }
     if (documentContext.trim()) {
       contextSection += documentContext;
     } else {
@@ -355,10 +413,11 @@ CÂU HỎI CỦA SINH VIÊN: ${question}`;
       aiText.toLowerCase().includes('không thuộc phạm vi môn học');
 
     let citedSources: Array<{ name: string; isExternal: boolean; url: string }> = [];
-    if (!isNotFoundResponse && allowExternalSource) {
+    if (!isNotFoundResponse) {
+      const seenUrls = new Set<string>();
+
       // 1. Extract exact grounded web pages from Google Search Grounding metadata
-      if (groundingMetadata?.groundingChunks?.length) {
-        const seenUrls = new Set<string>();
+      if (allowExternalSource && groundingMetadata?.groundingChunks?.length) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         for (const chunk of groundingMetadata.groundingChunks as any[]) {
           const uri = chunk?.web?.uri;
@@ -371,8 +430,9 @@ CÂU HỎI CỦA SINH VIÊN: ${question}`;
                 title = 'Trang kiểm chứng';
               }
             }
-            if (!seenUrls.has(uri) && citedSources.length < 5) {
-              seenUrls.add(uri);
+            const normUri = uri.trim().toLowerCase().replace(/\/+$/, '');
+            if (!seenUrls.has(normUri) && citedSources.length < 6) {
+              seenUrls.add(normUri);
               citedSources.push({
                 name: title,
                 isExternal: true,
@@ -383,8 +443,47 @@ CÂU HỎI CỦA SINH VIÊN: ${question}`;
         }
       }
 
-      // 2. Fallback to direct query search if no chunks returned
-      if (citedSources.length === 0) {
+      // 2. Extract markdown links explicitly provided in the AI text response
+      const markdownLinkRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+      let mdMatch: RegExpExecArray | null;
+      while ((mdMatch = markdownLinkRegex.exec(aiText)) !== null) {
+        const title = mdMatch[1].trim();
+        const url = mdMatch[2].trim();
+        const normUrl = url.toLowerCase().replace(/\/+$/, '');
+        if (url && !seenUrls.has(normUrl) && citedSources.length < 8) {
+          seenUrls.add(normUrl);
+          citedSources.push({
+            name: title || url,
+            isExternal: true,
+            url,
+          });
+        }
+      }
+
+      // 3. Extract bare/autolink URLs mentioned in the AI text
+      const bareUrlRegex = /(?<!\()(https?:\/\/[^\s)\],`"<>]+)/g;
+      let bareMatch: RegExpExecArray | null;
+      while ((bareMatch = bareUrlRegex.exec(aiText)) !== null) {
+        const url = bareMatch[1].trim();
+        const normUrl = url.toLowerCase().replace(/\/+$/, '');
+        if (url && !seenUrls.has(normUrl) && citedSources.length < 8) {
+          seenUrls.add(normUrl);
+          let host = url;
+          try {
+            host = new URL(url).hostname.replace(/^www\./, '');
+          } catch {
+            host = 'Nguồn liên kết';
+          }
+          citedSources.push({
+            name: host,
+            isExternal: true,
+            url,
+          });
+        }
+      }
+
+      // 4. Fallback to direct query search if external mode is on but no sources were extracted
+      if (allowExternalSource && citedSources.length === 0) {
         const cleanQ = question.replace(/[\r\n]+/g, ' ').trim();
         const searchTarget = cleanQ || course || 'Kiến thức chuyên ngành';
         const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchTarget)}`;

@@ -365,19 +365,6 @@ export function SlidePresentation({
           <button
             type="button"
             className="reconfigure-btn"
-            onClick={() => {
-              window.print();
-              notify('Đã mở hộp thoại in / xuất PDF');
-            }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-            title="In slide hoặc lưu dưới dạng PDF"
-          >
-            <Printer size={13} />
-          </button>
-
-          <button
-            type="button"
-            className="reconfigure-btn"
             onClick={toggleFullscreen}
             style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
             title="Chế độ trình chiếu toàn màn hình (Phím tắt: F)"

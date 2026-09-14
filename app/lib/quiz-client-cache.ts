@@ -53,6 +53,17 @@ export function saveStoredAnalysis(attemptId: number | string, data: QuizAnalysi
   }
 }
 
+export function removeStoredAnalysis(attemptId: number | string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(`${PREFIX}${attemptId}`);
+    const next = getAllStoredAttemptIds().filter(id => Number(id) !== Number(attemptId));
+    localStorage.setItem(INDEX_KEY, JSON.stringify(next));
+  } catch (e) {
+    console.warn('Failed to remove quiz analysis from localStorage:', e);
+  }
+}
+
 /**
  * Get all attempt IDs that have been cached in browser localStorage
  */

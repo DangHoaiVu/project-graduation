@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { generateText } from '@/models/registry';
 import { getDb } from '@/db';
-import { documents } from '@/db/schema';
+import { personalMaterials } from '@/db/schema';
 import { eq } from 'drizzle-orm';
+import { supabaseAdmin } from '@/lib/supabase';
 import { parseDocumentFromUrl } from '@/lib/document-parser';
 import { retrieveRelevantChunks, formatChunksForPrompt } from '@/lib/rag';
+import { getPersonalMaterials } from '@/lib/firebase-data';
 
 interface ChatHistoryItem {
   role: 'user' | 'ai' | 'model' | 'assistant';
@@ -81,21 +83,76 @@ export async function POST(request: Request) {
     const db = getDb();
     const docMap = new Map<string, string>();
 
-    if (db && courseId) {
+    const moodleCourseId = Number(courseId) || undefined;
+    if (moodleCourseId) {
       try {
-        const dbDocs = await db
-          .select({ id: documents.id, title: documents.title, content: documents.content })
-          .from(documents)
-          .where(eq(documents.courseId, String(courseId)))
-          .limit(10);
-
-        for (const doc of dbDocs) {
-          if (doc.content && doc.content.length > 50) {
-            docMap.set(doc.title.toLowerCase(), doc.content);
+        const mats = await getPersonalMaterials({ moodleCourseId, limit: 10 });
+        if (mats) {
+          for (const mat of mats) {
+            if (mat.storage_url && mat.title && !docMap.has(String(mat.title).toLowerCase())) {
+              try {
+                const text = await parseDocumentFromUrl(String(mat.storage_url), String(mat.title));
+                if (text && text.length > 50) docMap.set(String(mat.title).toLowerCase(), text);
+              } catch {
+                // ignore unavailable material
+              }
+            }
           }
         }
-      } catch (dbErr) {
-        console.warn('Could not query documents for teacher assistant:', dbErr);
+      } catch (firebaseError) {
+        console.warn('Firebase materials query for teacher assistant:', firebaseError);
+      }
+
+      if (supabaseAdmin) {
+        try {
+          const { data: mats } = await supabaseAdmin
+            .from('personal_materials')
+            .select('*')
+            .eq('moodle_course_id', moodleCourseId)
+            .limit(10);
+
+          if (mats) {
+            for (const mat of mats) {
+              if (mat.storage_url && !docMap.has(mat.title.toLowerCase())) {
+                try {
+                  const text = await parseDocumentFromUrl(mat.storage_url, mat.title);
+                  if (text && text.length > 50) {
+                    docMap.set(mat.title.toLowerCase(), text);
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }
+        } catch (sbErr) {
+          console.warn('Could not query materials via Supabase for teacher assistant:', sbErr);
+        }
+      }
+
+      if (db && docMap.size === 0) {
+        try {
+          const dbDocs = await db
+            .select()
+            .from(personalMaterials)
+            .where(eq(personalMaterials.moodleCourseId, moodleCourseId))
+            .limit(10);
+
+          for (const doc of dbDocs) {
+            if (doc.storageUrl && !docMap.has(doc.title.toLowerCase())) {
+              try {
+                const text = await parseDocumentFromUrl(doc.storageUrl, doc.title);
+                if (text && text.length > 50) {
+                  docMap.set(doc.title.toLowerCase(), text);
+                }
+              } catch {
+                // ignore
+              }
+            }
+          }
+        } catch (dbErr) {
+          console.warn('Could not query documents for teacher assistant:', dbErr);
+        }
       }
     }
 

@@ -42,10 +42,19 @@ export type ChatMessage = {
   sources?: Array<string | CitationSource>;
 };
 
+export type MatchingPair = {
+  left: string;
+  right: string;
+};
+
 export type QuizQuestion = {
+  id?: string;
   q: string;
-  choices: string[];
-  answer: number;
+  type?: 'multiple_choice' | 'true_false' | 'multiple_select' | 'matching' | 'short_answer';
+  choices?: string[];
+  answer?: number | string;
+  answers?: number[] | string[];
+  pairs?: MatchingPair[];
   explanation?: string;
 };
 
@@ -151,6 +160,7 @@ export type TutorResponse = ErrorResponse & {
 
 export type StudyToolResponse = ErrorResponse & {
   data?: unknown;
+  artifactId?: string | null;
 };
 
 export type LibraryResponse = ErrorResponse & {

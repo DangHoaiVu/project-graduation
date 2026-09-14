@@ -1,74 +1,129 @@
-import { integer, jsonb, pgTable, real, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
-import { sql } from 'drizzle-orm';
+import { pgTable, integer, varchar, text, timestamp, jsonb, uuid, unique, primaryKey } from 'drizzle-orm/pg-core';
 
+// Bảng users: Bản sao định tuyến giao diện, mỏ neo chính
 export const users = pgTable('users', {
-  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
-  moodleUserId: integer('moodle_user_id').notNull().unique(),
-  name: varchar('name', { length: 255 }),
-  email: varchar('email', { length: 255 }).unique(),
+  moodleUserId: integer('moodle_user_id').primaryKey(),
   role: varchar('role', { length: 50 }).notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`),
+  name: varchar('name', { length: 255 }),
 });
 
-export const courses = pgTable('courses', {
-  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
-  moodleCourseId: integer('moodle_course_id').notNull().unique(),
-  title: varchar('title', { length: 255 }).notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`),
-});
-
-export const documents = pgTable('documents', {
-  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
-  courseId: uuid('course_id')
-    .notNull()
-    .references(() => courses.id, { onDelete: 'cascade' }),
-  title: varchar('title', { length: 255 }).notNull(),
-  content: text('content').notNull(),
-  uploadedAt: timestamp('uploaded_at', { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`),
-});
-
-export const quizAttempts = pgTable('quiz_attempts', {
-  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
-  userId: uuid('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  moodleQuizId: integer('moodle_quiz_id').notNull(),
-  score: real('score').notNull(),
-  aiFeedback: text('ai_feedback'),
-  attemptedAt: timestamp('attempted_at', { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`),
-});
-
-export const gradebooks = pgTable('gradebooks', {
-  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
-  courseId: uuid('course_id')
-    .notNull()
-    .references(() => courses.id, { onDelete: 'cascade' }),
-  sourceType: varchar('source_type', { length: 100 }).notNull(),
-  sourceUrl: text('source_url').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`),
-});
-
-export const learningArtifacts = pgTable('learning_artifacts', {
-  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+// Bảng chat_sessions: Lịch sử đa hội thoại
+export const chatSessions = pgTable('chat_sessions', {
+  id: uuid('id').defaultRandom().primaryKey(),
   userId: integer('user_id')
-    .notNull()
-    .references(() => users.moodleUserId, { onDelete: 'cascade' }),
+    .references(() => users.moodleUserId, { onDelete: 'cascade' })
+    .notNull(),
+  moodleCourseId: integer('moodle_course_id').notNull(),
+  messages: jsonb('messages').default('[]').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Bảng personal_materials: Tài liệu cá nhân
+export const personalMaterials = pgTable('personal_materials', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: integer('user_id')
+    .references(() => users.moodleUserId, { onDelete: 'cascade' })
+    .notNull(),
+  moodleCourseId: integer('moodle_course_id').notNull(),
+  title: text('title').notNull(),
+  storageUrl: text('storage_url').notNull(),
+});
+
+// Bảng learning_artifacts: Thành quả học tập (Summary, Mindmap)
+export const learningArtifacts = pgTable('learning_artifacts', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: integer('user_id')
+    .references(() => users.moodleUserId, { onDelete: 'cascade' })
+    .notNull(),
   moodleCourseId: integer('moodle_course_id').notNull(),
   artifactType: varchar('artifact_type', { length: 50 }).notNull(),
   contentData: jsonb('content_data').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`),
 });
 
+// Bảng fcm_tokens: Quản lý thiết bị nhận thông báo đẩy
+export const fcmTokens = pgTable('fcm_tokens', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: integer('user_id')
+    .references(() => users.moodleUserId, { onDelete: 'cascade' })
+    .notNull(),
+  token: text('token').notNull().unique(),
+  deviceId: varchar('device_id', { length: 255 }).notNull(),
+  deviceType: varchar('device_type', { length: 50 }),
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }).defaultNow().notNull(),
+}, table => ({
+  userDeviceUnique: unique('fcm_tokens_user_device_unique').on(table.userId, table.deviceId),
+}));
+
+export const moodleCredentials = pgTable('moodle_credentials', {
+  userId: integer('user_id')
+    .references(() => users.moodleUserId, { onDelete: 'cascade' })
+    .primaryKey(),
+  encryptedToken: text('encrypted_token').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const notificationDeliveries = pgTable('notification_deliveries', {
+  userId: integer('user_id')
+    .references(() => users.moodleUserId, { onDelete: 'cascade' })
+    .notNull(),
+  eventId: integer('event_id').notNull(),
+  eventType: varchar('event_type', { length: 30 }).notNull(),
+  reminderMinutes: integer('reminder_minutes').notNull(),
+  eventTimestamp: timestamp('event_timestamp', { withTimezone: true }).notNull(),
+  sentAt: timestamp('sent_at', { withTimezone: true }).defaultNow().notNull(),
+}, table => ({
+  deliveryKey: primaryKey({ columns: [table.userId, table.eventId, table.eventType, table.reminderMinutes] }),
+}));
+
+export const moodleEvents = pgTable('moodle_events', {
+  userId: integer('user_id')
+    .references(() => users.moodleUserId, { onDelete: 'cascade' })
+    .notNull(),
+  eventId: integer('event_id').notNull(),
+  eventType: varchar('event_type', { length: 30 }).notNull(),
+  title: varchar('title', { length: 255 }).notNull(),
+  timestart: integer('timestart').notNull(),
+}, table => ({
+  eventKey: primaryKey({ columns: [table.userId, table.eventId, table.eventType] }),
+}));
+
+export const pushQueue = pgTable('push_queue', {
+  id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+  userId: integer('user_id')
+    .references(() => users.moodleUserId, { onDelete: 'cascade' })
+    .notNull(),
+  eventId: integer('event_id').notNull(),
+  eventType: varchar('event_type', { length: 30 }).notNull(),
+  title: varchar('title', { length: 255 }).notNull(),
+  reminderMinutes: integer('reminder_minutes').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+});
+
+// TypeScript types
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
-export type Course = typeof courses.$inferSelect;
-export type NewCourse = typeof courses.$inferInsert;
-export type Document = typeof documents.$inferSelect;
-export type NewDocument = typeof documents.$inferInsert;
-export type QuizAttempt = typeof quizAttempts.$inferSelect;
-export type NewQuizAttempt = typeof quizAttempts.$inferInsert;
-export type Gradebook = typeof gradebooks.$inferSelect;
-export type NewGradebook = typeof gradebooks.$inferInsert;
+
+export type ChatSession = typeof chatSessions.$inferSelect;
+export type NewChatSession = typeof chatSessions.$inferInsert;
+
+export type PersonalMaterial = typeof personalMaterials.$inferSelect;
+export type NewPersonalMaterial = typeof personalMaterials.$inferInsert;
+
 export type LearningArtifact = typeof learningArtifacts.$inferSelect;
 export type NewLearningArtifact = typeof learningArtifacts.$inferInsert;
+
+export type FcmToken = typeof fcmTokens.$inferSelect;
+export type NewFcmToken = typeof fcmTokens.$inferInsert;
+
+export type MoodleCredential = typeof moodleCredentials.$inferSelect;
+export type NewMoodleCredential = typeof moodleCredentials.$inferInsert;
+
+export type NotificationDelivery = typeof notificationDeliveries.$inferSelect;
+export type NewNotificationDelivery = typeof notificationDeliveries.$inferInsert;
+
+export type MoodleEvent = typeof moodleEvents.$inferSelect;
+export type NewMoodleEvent = typeof moodleEvents.$inferInsert;
+
+export type PushQueueItem = typeof pushQueue.$inferSelect;
+export type NewPushQueueItem = typeof pushQueue.$inferInsert;
 

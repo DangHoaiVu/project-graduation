@@ -30,6 +30,7 @@ interface QuizAnalysisModalProps {
   error?: string | null;
   onRetry?: () => void;
   onReanalyze?: () => void;
+  onDelete?: () => Promise<void>;
   onStartRemediation?: (weakTopics: string[]) => void;
   onAskTutor?: (analysis?: QuizAnalysisData | null) => void;
 }
@@ -42,19 +43,34 @@ export function QuizAnalysisModal({
   error = null,
   onRetry,
   onReanalyze,
+  onDelete,
   onStartRemediation,
   onAskTutor,
 }: QuizAnalysisModalProps) {
   const [showImproveMenu, setShowImproveMenu] = React.useState(false);
   const [mounted, setMounted] = React.useState(false);
+  const [deleting, setDeleting] = React.useState(false);
 
   React.useEffect(() => {
     setMounted(true);
   }, []);
 
   React.useEffect(() => {
-    if (!isOpen) setShowImproveMenu(false);
-  }, [isOpen]);
+    if (!isOpen) {
+      setShowImproveMenu(false);
+      return;
+    }
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !loading) onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, loading, onClose]);
 
   if (!isOpen || !mounted) return null;
 
@@ -72,6 +88,7 @@ export function QuizAnalysisModal({
         justifyContent: 'center',
         padding: '3.75rem 1.25rem 1.5rem 1.25rem',
         animation: 'fadeIn 0.2s ease',
+        overscrollBehavior: 'contain',
       }}
       onClick={e => {
         if (e.target === e.currentTarget && !loading) onClose();
@@ -90,6 +107,7 @@ export function QuizAnalysisModal({
           flexDirection: 'column',
           boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.85), 0 0 35px rgba(124, 109, 242, 0.2)',
           overflow: 'hidden',
+          overscrollBehavior: 'contain',
           color: '#f3f2f8',
         }}
       >
@@ -126,19 +144,6 @@ export function QuizAnalysisModal({
                 <h3 style={{ margin: 0, fontSize: '15.5px', fontWeight: 700, letterSpacing: '-0.3px' }}>
                   Bản Phân Tích Lỗ Hổng Kiến Thức (AI Quiz Diagnosis)
                 </h3>
-                <span
-                  style={{
-                    fontSize: '11px',
-                    padding: '2px 8px',
-                    borderRadius: '12px',
-                    background: 'rgba(56, 189, 248, 0.2)',
-                    color: '#38bdf8',
-                    border: '1px solid rgba(56, 189, 248, 0.3)',
-                    fontWeight: 600,
-                  }}
-                >
-                  Adaptive Learning
-                </span>
                 {analysis?.cached && (
                   <span
                     style={{
@@ -155,7 +160,7 @@ export function QuizAnalysisModal({
                     }}
                     title="Bản chẩn đoán được tải từ bộ nhớ đã lưu, không tiêu tốn thêm AI credits"
                   >
-                    <span>✓</span> Đã lưu (Không tốn token)
+                    <span>✓</span> Đã lưu
                   </span>
                 )}
               </div>
@@ -192,10 +197,12 @@ export function QuizAnalysisModal({
           style={{
             padding: '1.1rem 1.35rem',
             overflowY: 'auto',
-            flex: 1,
+            flex: '1 1 auto',
+            minHeight: 0,
             display: 'flex',
             flexDirection: 'column',
             gap: '1.1rem',
+            overscrollBehavior: 'contain',
           }}
         >
           {loading && (
@@ -416,14 +423,14 @@ export function QuizAnalysisModal({
                       Lỗ hổng phát hiện
                     </div>
                     <div style={{ fontSize: '13px', fontWeight: 700, color: '#c084fc' }}>
-                      {analysis.weakTopics.length} chủ đề cốt lõi
+                      {(analysis.weakTopics || []).length} chủ đề cốt lõi
                     </div>
                   </div>
                 </div>
               </div>
 
               {/* Detected Weak Topics Section */}
-              {analysis.weakTopics.length > 0 && (
+              {analysis.weakTopics && analysis.weakTopics.length > 0 && (
                 <div
                   style={{
                     padding: '0.85rem 1.1rem',
@@ -485,7 +492,7 @@ export function QuizAnalysisModal({
                   </span>
                 </div>
                 <div style={{ fontSize: '12.5px', lineHeight: 1.55, color: '#cbd5e1' }}>
-                  <MarkdownRenderer content={analysis.overview} />
+                  <MarkdownRenderer content={analysis.overview || ''} />
                 </div>
 
                 {analysis.recommendations && analysis.recommendations.length > 0 && (
@@ -518,7 +525,7 @@ export function QuizAnalysisModal({
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     {analysis.questionsAnalysis.map((q, qIdx) => {
-                      const isWrong = q.status.toLowerCase().includes('incorrect') || q.mark === '0.00';
+                      const isWrong = (q.status || '').toLowerCase().includes('incorrect') || q.mark === '0.00';
                       return (
                         <div
                           key={qIdx}
@@ -688,6 +695,37 @@ export function QuizAnalysisModal({
               >
                 <RotateCcw size={13} />
                 <span>Chẩn đoán lại với AI</span>
+              </button>
+            )}
+            {analysis && analysis.id && onDelete && (
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={async () => {
+                  if (!window.confirm('Bạn có chắc muốn xóa bản phân tích bài thi này không?')) return;
+                  setDeleting(true);
+                  try {
+                    await onDelete();
+                  } finally {
+                    setDeleting(false);
+                  }
+                }}
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: '9px',
+                  fontSize: '12px',
+                  color: '#fca5a5',
+                  background: 'rgba(239, 68, 68, 0.08)',
+                  border: '1px solid rgba(239, 68, 68, 0.25)',
+                  cursor: deleting ? 'wait' : 'pointer',
+                  opacity: deleting ? 0.6 : 1,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <XCircle size={13} />
+                <span>{deleting ? 'Đang xóa...' : 'Xóa phân tích'}</span>
               </button>
             )}
           </div>

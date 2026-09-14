@@ -1,25 +1,20 @@
 'use client';
 
 import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  LayoutDashboard,
   Bot,
   BookOpen,
-  FolderClosed,
   CheckSquare,
   GraduationCap,
-  Flame,
-  User,
-  ExternalLink,
   RotateCcw,
   Sparkles,
   Calendar,
   Clock,
   TrendingUp,
   FileText,
-  Search,
   BarChart3,
   Settings,
   ArrowRight,
@@ -30,10 +25,12 @@ import {
   nav,
 } from '@/app/mock-data';
 import { CourseCard, TeacherPortal, QuizAnalysisModal } from '@/app/components';
+import { CourseTopBar } from '@/app/components/CourseTopBar';
 import {
   getStoredAnalysis,
   saveStoredAnalysis,
   getAllStoredAttemptIds,
+  removeStoredAnalysis,
 } from '@/app/lib/quiz-client-cache';
 import { resolveGradeRoute, formatGrade, buildGradePrompt } from '@/app/lib/grade-router';
 import type {
@@ -49,10 +46,12 @@ import type {
   QuizResponse,
   UploadResponse,
 } from '@/app/types';
+import { getDeviceId } from '@/app/lib/device-id';
 
 export type { Course, LibraryFile, QuizQuestion };
 
 const defaultColors = ['#6c5ce7', '#ff8a65', '#20bfa9', '#3b82f6', '#ec4899', '#f59e0b'];
+const MOODLE_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -158,164 +157,6 @@ export function mergeMoodleDeadlines(
   return list;
 }
 
-/* ── Sidebar ─────────────────────────────────────────────── */
-
-function Sidebar({
-  active,
-  setActive,
-  onProfile,
-  user,
-  courses,
-}: {
-  active: string;
-  setActive: (v: string) => void;
-  onProfile: () => void;
-  user?: MoodleUser | null;
-  courses: Course[];
-}) {
-  const router = useRouter();
-  const [storedUser, setStoredUser] = useState<MoodleUser | null>(user ?? null);
-
-  useEffect(() => {
-    const stored = localStorage.getItem('moodleUser');
-    const token = localStorage.getItem('moodleToken');
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored) as MoodleUser;
-        if (
-          token &&
-          (!parsed.avatarUrl ||
-            parsed.avatarUrl.includes('/u/f1') ||
-            parsed.avatarUrl.includes('/u/f2') ||
-            !parsed.avatarUrl.startsWith('/api/moodle/avatar'))
-        ) {
-          parsed.avatarUrl = `/api/moodle/avatar?token=${encodeURIComponent(token)}&id=${parsed.id}`;
-        }
-        setStoredUser(parsed);
-      } catch {
-        localStorage.removeItem('moodleUser');
-      }
-    }
-  }, []);
-
-  const profileUser = storedUser ?? user;
-  const displayName = profileUser?.fullname || 'Student';
-  const isAdminOrTeacher = useMemo(() => {
-    const uname = (profileUser?.username || '').toLowerCase();
-    const fname = (profileUser?.fullname || '').toLowerCase();
-    return (
-      uname === 'admin' ||
-      uname.includes('admin') ||
-      uname.includes('teacher') ||
-      fname.includes('admin') ||
-      fname.includes('giảng viên') ||
-      fname.includes('thầy') ||
-      fname.includes('cô')
-    );
-  }, [profileUser]);
-
-  return (
-    <aside className="sidebar">
-      <button className="brand brand-button" onClick={() => setActive('Tổng quan')}>
-        <img className="brand-mark" src="/lms-assistant-icon.png" alt="" />
-        <span>LMS Assistant</span>
-      </button>
-
-      <nav aria-label="Điều hướng chính">
-        <p className="nav-label">KHÔNG GIAN HỌC</p>
-
-        {[
-          { label: 'Tổng quan', icon: <LayoutDashboard size={16} /> },
-          { label: 'Gia sư AI', icon: <Bot size={16} /> },
-          { label: 'Khóa học', icon: <BookOpen size={16} /> },
-          { label: 'Thư viện', icon: <FolderClosed size={16} /> },
-          { label: 'Luyện tập', icon: <CheckSquare size={16} /> },
-        ].map(({ label, icon }) => (
-          <button
-            key={label}
-            className={active === label ? 'nav-item active' : 'nav-item'}
-            onClick={() => {
-              if (label === 'Gia sư AI') {
-                router.push('/course');
-              } else {
-                setActive(label);
-              }
-            }}
-            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-          >
-            <span>{icon}</span>
-            <span>{label}</span>
-          </button>
-        ))}
-
-        <p className="nav-label second">DÀNH CHO GIẢNG VIÊN</p>
-        <button
-          className={active === 'Giảng viên' ? 'nav-item active' : 'nav-item'}
-          onClick={() => setActive('Giảng viên')}
-          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-        >
-          <GraduationCap size={16} />
-          <span>Góc Giảng Viên {isAdminOrTeacher && '(Admin)'}</span>
-        </button>
-
-        <p className="nav-label second">KHÓA HỌC MOODLE</p>
-
-        {courses.length === 0 ? (
-          <div style={{ padding: '0.5rem 1rem', fontSize: '12px', color: '#94a3b8' }}>
-            Chưa có khóa học nào
-          </div>
-        ) : (
-          courses.map(c => (
-            <button
-              key={c.code}
-              className="nav-item course-link"
-              onClick={() =>
-                router.push(
-                  `/course?code=${encodeURIComponent(c.code)}&name=${encodeURIComponent(c.name)}&id=${c.id ?? ''}`
-                )
-              }
-            >
-              <i style={{ background: c.color }}><BookOpen size={13} /></i>
-              <span>
-                {c.name}
-                <small>{c.code}</small>
-              </span>
-            </button>
-          ))
-        )}
-      </nav>
-
-      <div className="sidebar-bottom">
-        <div className="streak">
-          <Flame size={18} style={{ color: '#f97316' }} />
-          <div>
-            <strong>7 ngày</strong>
-            <small>Chuỗi học tập</small>
-          </div>
-          <b>+2</b>
-        </div>
-
-        <button className="profile" onClick={onProfile}>
-          <span className="profile-avatar">
-            {profileUser?.avatarUrl ? (
-              <img src={profileUser.avatarUrl} alt="" />
-            ) : (
-              displayName.slice(0, 2).toUpperCase()
-            )}
-          </span>
-          <div>
-            <strong>{displayName}</strong>
-            <small>
-              {isAdminOrTeacher ? 'Quản trị viên & Giảng viên' : profileUser?.username || 'Sinh viên LMS'}
-            </small>
-          </div>
-          <b>•••</b>
-        </button>
-      </div>
-    </aside>
-  );
-}
-
 /* ── Dashboard ───────────────────────────────────────────── */
 
 function Dashboard({
@@ -415,6 +256,28 @@ function Dashboard({
       r => String(r.courseId) === gradeModalFilter || r.courseCode?.toLowerCase() === gradeModalFilter.toLowerCase()
     );
   }, [allExamResults, gradeModalFilter]);
+
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Lock body scroll and handle Escape key for Grade History Modal
+  useEffect(() => {
+    if (!showGradeHistoryModal) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowGradeHistoryModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showGradeHistoryModal]);
 
   // Quiz Analysis state & handler
   const [analysisModalOpen, setAnalysisModalOpen] = useState(false);
@@ -897,21 +760,22 @@ function Dashboard({
       )}
 
       {/* Grade History Modal */}
-      {showGradeHistoryModal && (
+      {showGradeHistoryModal && mounted && createPortal(
         <div
           className="grade-history-modal-overlay"
           onClick={() => setShowGradeHistoryModal(false)}
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(5, 4, 15, 0.8)',
+            background: 'rgba(5, 4, 15, 0.82)',
             backdropFilter: 'blur(10px)',
-            zIndex: 9999,
+            zIndex: 100000,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             padding: '1.25rem',
             animation: 'fadeIn 0.2s ease',
+            overscrollBehavior: 'contain',
           }}
         >
           <div
@@ -928,6 +792,7 @@ function Dashboard({
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',
+              overscrollBehavior: 'contain',
             }}
           >
             {/* Header */}
@@ -939,6 +804,7 @@ function Dashboard({
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 background: 'rgba(255, 255, 255, 0.02)',
+                flexShrink: 0,
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
@@ -952,6 +818,7 @@ function Dashboard({
                     alignItems: 'center',
                     justifyContent: 'center',
                     boxShadow: '0 4px 14px rgba(124, 109, 242, 0.4)',
+                    flexShrink: 0,
                   }}
                 >
                   <BarChart3 size={20} style={{ color: '#fff' }} />
@@ -981,6 +848,7 @@ function Dashboard({
                   cursor: 'pointer',
                   fontSize: '16px',
                   transition: 'all 0.2s',
+                  flexShrink: 0,
                 }}
                 title="Đóng cửa sổ"
               >
@@ -998,6 +866,7 @@ function Dashboard({
                   gap: '8px',
                   overflowX: 'auto',
                   background: 'rgba(0, 0, 0, 0.18)',
+                  flexShrink: 0,
                 }}
               >
                 <button
@@ -1059,6 +928,9 @@ function Dashboard({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '1rem',
+                flex: '1 1 auto',
+                minHeight: 0,
+                overscrollBehavior: 'contain',
               }}
             >
               {displayedGrades.length === 0 ? (
@@ -1292,7 +1164,8 @@ function Dashboard({
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Quiz Analysis Diagnosis Modal */}
@@ -1304,6 +1177,19 @@ function Dashboard({
         error={analysisError}
         onRetry={() => selectedExamResult && handleOpenQuizAnalysis(selectedExamResult, false)}
         onReanalyze={() => selectedExamResult && handleOpenQuizAnalysis(selectedExamResult, true)}
+        onDelete={async () => {
+          if (!currentAnalysis?.id) return;
+          const userId = moodle?.user?.id || 4;
+          const response = await fetch(
+            `/api/learning-artifacts?id=${encodeURIComponent(currentAnalysis.id)}&userId=${userId}&artifactType=quiz_analysis`,
+            { method: 'DELETE' },
+          );
+          const data = (await response.json()) as { error?: string };
+          if (!response.ok) throw new Error(data.error || 'Không thể xóa bản phân tích.');
+          removeStoredAnalysis(currentAnalysis.attemptId);
+          setCurrentAnalysis(null);
+          setAnalysisModalOpen(false);
+        }}
         onStartRemediation={topics => {
           setAnalysisModalOpen(false);
           const cId = currentAnalysis?.courseId || selectedExamResult?.courseId || '';
@@ -2174,16 +2060,39 @@ function Modal({
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  return (
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
+
+  if (!mounted) return null;
+
+  return createPortal(
     <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <section className="modal">
         <header>
           <h2>{title}</h2>
           <button onClick={onClose}>×</button>
         </header>
-        {children}
+        <div className="modal-body-scrollable">
+          {children}
+        </div>
       </section>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -2235,8 +2144,14 @@ function HomeContent() {
   const [toast, setToast] = useState('');
   const [search, setSearch] = useState('');
   const [notifications, setNotifications] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
   const [profile, setProfile] = useState(false);
   const [calendar, setCalendar] = useState(false);
+
+  useEffect(() => {
+    if ('Notification' in window) setNotificationPermission(Notification.permission);
+  }, []);
+
   const [selectedHomework, setSelectedHomework] = useState<DeadlineItem | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -2255,18 +2170,22 @@ function HomeContent() {
     setSelectedHomework(item);
   };
 
-  const sync = async () => {
+  const sync = async (force = false, announce = true) => {
     if (syncing) return;
+    const cachedAt = Number(localStorage.getItem('moodleDataSyncedAt') || 0);
+    if (!force && localStorage.getItem('moodleData') && Date.now() - cachedAt < MOODLE_CACHE_MAX_AGE_MS) return;
     setSyncing(true);
     try {
       const token = localStorage.getItem('moodleToken');
       const res = await fetch('/api/moodle', {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
+        cache: 'no-store',
       });
       const data = (await res.json()) as MoodleData & ErrorResponse;
       if (!res.ok) throw new Error(data.error);
       setMoodle(data);
       localStorage.setItem('moodleData', JSON.stringify(data));
+      localStorage.setItem('moodleDataSyncedAt', String(Date.now()));
       if (data.user) {
         setUser(prev => {
           const avatarUrl =
@@ -2282,12 +2201,20 @@ function HomeContent() {
           return updated;
         });
       }
-      notify(data.mode === 'live' ? 'Đồng bộ Moodle thành công' : 'Đã tải dữ liệu Moodle');
+      if (announce) notify(data.mode === 'live' ? 'Đồng bộ Moodle thành công' : 'Đã tải dữ liệu Moodle');
     } catch (e) {
-      notify(e instanceof Error ? e.message : 'Không thể đồng bộ Moodle');
+      if (announce) notify(e instanceof Error ? `Đồng bộ Moodle thất bại: ${e.message}` : 'Đồng bộ Moodle thất bại');
     } finally {
       setSyncing(false);
     }
+  };
+
+  const handleLogout = async () => {
+    localStorage.removeItem('moodleToken');
+    localStorage.removeItem('moodleUser');
+    localStorage.removeItem('moodleData');
+    localStorage.removeItem('moodleDataSyncedAt');
+    router.push('/login');
   };
 
   useEffect(() => {
@@ -2320,7 +2247,7 @@ function HomeContent() {
       }
     }
 
-    void sync();
+    void sync(false, false);
 
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -2419,104 +2346,24 @@ function HomeContent() {
 
   return (
     <main className="app-shell">
-      <Sidebar
-        active={active}
-        setActive={tab => navigate(tab)}
-        onProfile={() => setProfile(true)}
-        courses={moodleCourses}
+      <CourseTopBar
+        search={search}
+        onSearchChange={setSearch}
+        searchRef={searchRef}
+        syncing={syncing}
+        onSync={() => void sync(true)}
+        notifications={notifications}
+        onToggleNotifications={() => setNotifications(!notifications)}
+        onCloseNotifications={() => setNotifications(false)}
+        notificationPermission={notificationPermission}
+        onRequestNotificationPermission={undefined}
+        deadlines={activeDeadlines}
+        user={user}
+        displayName={user?.fullname || 'Student'}
+        onOpenProfile={() => setProfile(true)}
       />
 
       <section className="content">
-        {/* Top bar */}
-        <header className="topbar">
-          <button className="mobile-logo" onClick={() => navigate('Tổng quan')}>
-            n
-          </button>
-
-          <div className="global-search">
-            <label className="search">
-              <span>⌕</span>
-              <input
-                ref={searchRef}
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Tìm khóa học Moodle..."
-              />
-              <kbd>⌘ K</kbd>
-            </label>
-
-            {search && (
-              <div className="search-results">
-                {searchResults.length ? (
-                  searchResults.map(x => (
-                    <button key={x.title} onClick={x.action}>
-                      <span>⌕</span>
-                      <div>
-                        <strong>{x.title}</strong>
-                        <small>{x.meta}</small>
-                      </div>
-                      <b>→</b>
-                    </button>
-                  ))
-                ) : (
-                  <p>Không tìm thấy kết quả phù hợp.</p>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="top-actions">
-            <button
-              aria-label="Thông báo"
-              className="icon-button"
-              onClick={() => setNotifications(!notifications)}
-            >
-              ♧<i />
-            </button>
-            <button className={`sync ${syncing ? 'syncing' : ''}`} onClick={() => void sync()}>
-              <span>↻</span>
-              {syncing ? 'Đang đồng bộ...' : 'Đồng bộ Moodle'}
-            </button>
-          </div>
-
-          {notifications && (
-            <div className="notification-popover">
-              <header>
-                <strong>Thông báo</strong>
-                <button onClick={() => setNotifications(false)}>×</button>
-              </header>
-              {(() => {
-                if (activeDeadlines.length === 0) {
-                  return (
-                    <div style={{ padding: '0.75rem 1rem', fontSize: '13px', color: '#94a3b8' }}>
-                      Không có bài tập hoặc thông báo mới từ Moodle.
-                    </div>
-                  );
-                }
-                return activeDeadlines.slice(0, 4).map(d => {
-                  const date = new Date(d.closeTimestamp || d.timestamp);
-                  const isExam = d.type === 'exam' || d.type === 'quiz' || d.name.toLowerCase().includes('thi') || d.name.toLowerCase().includes('kiểm tra');
-                  const timeText = d.openTimestamp && d.closeTimestamp
-                    ? `${new Date(d.openTimestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} - ${new Date(d.closeTimestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} ${date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}`
-                    : `hạn ${date.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
-
-                  return (
-                    <div key={d.id} style={{ cursor: 'pointer' }} onClick={() => { setNotifications(false); openHomework(d); }}>
-                      <span className="purple">{isExam ? '✎' : '▤'}</span>
-                      <section>
-                        <b>{d.name}</b>
-                        <small>
-                          {d.courseName} · {timeText}
-                        </small>
-                      </section>
-                    </div>
-                  );
-                });
-              })()}
-            </div>
-          )}
-        </header>
-
         {/* Page content */}
         {active === 'Tổng quan' && (
           <Dashboard
@@ -2524,7 +2371,7 @@ function HomeContent() {
             openCalendar={() => setCalendar(true)}
             openHomework={openHomework}
             moodle={moodle}
-            onSync={() => void sync()}
+            onSync={() => void sync(true)}
             isAdminOrTeacher={isAdminOrTeacher}
             onOpenTeacherCourse={handleOpenTeacherCourse}
           />
@@ -2532,7 +2379,7 @@ function HomeContent() {
         {active === 'Khóa học' && (
           <Courses
             moodle={moodle}
-            onSync={() => void sync()}
+            onSync={() => void sync(true)}
             syncing={syncing}
             openCourse={c =>
               router.push(
@@ -2579,7 +2426,22 @@ function HomeContent() {
               >
                 Thông tin tài khoản
               </button>
-              <a href="/login">Đăng nhập lại</a>
+              <button
+                type="button"
+                style={{
+                  background: '#ef4444',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '0.5rem 1rem',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  transition: 'background 0.2s',
+                }}
+                onClick={handleLogout}
+              >
+                Đăng xuất
+              </button>
             </div>
           </div>
         </Modal>

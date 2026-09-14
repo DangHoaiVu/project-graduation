@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { getFirebaseRows, setFirebaseRow } from '@/lib/firebase-admin';
 import { getDb } from '@/db';
 import { learningArtifacts, users } from '@/db/schema';
 import { eq, and, desc } from 'drizzle-orm';
@@ -15,7 +16,22 @@ export interface SaveArtifactParams {
 export async function saveLearningArtifact(params: SaveArtifactParams) {
   const { userId, userName, moodleCourseId, artifactType, contentData } = params;
 
-  // 1. Try Supabase Client first
+  try {
+    const id = crypto.randomUUID();
+    const saved = await setFirebaseRow('learning_artifacts', id, {
+      user_id: userId,
+      moodle_course_id: moodleCourseId,
+      artifact_type: artifactType,
+      content_data: contentData,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    if (saved) return saved;
+  } catch (firebaseError) {
+    console.warn('Firebase saveLearningArtifact warning:', firebaseError);
+  }
+
+  // Legacy fallback for local environments without Firebase credentials.
   const supabase = getSupabaseAdmin();
   if (supabase) {
     try {
@@ -97,7 +113,18 @@ export async function getLearningArtifacts(params: {
 }) {
   const { userId, moodleCourseId, artifactType, limit = 10 } = params;
 
-  // 1. Try Supabase
+  try {
+    const rows = await getFirebaseRows('learning_artifacts', {
+      user_id: userId,
+      moodle_course_id: moodleCourseId,
+      artifact_type: artifactType,
+    }, limit);
+    if (rows) return rows;
+  } catch (firebaseError) {
+    console.warn('Firebase getLearningArtifacts warning:', firebaseError);
+  }
+
+  // Legacy fallback for local environments without Firebase credentials.
   const supabase = getSupabaseAdmin();
   if (supabase) {
     try {
@@ -134,7 +161,7 @@ export async function getLearningArtifacts(params: {
         .select()
         .from(learningArtifacts)
         .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .orderBy(desc(learningArtifacts.createdAt))
+        .orderBy(desc(learningArtifacts.id))
         .limit(limit);
 
       return await query;

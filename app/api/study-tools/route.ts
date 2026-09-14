@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { generateText } from '@/models/registry';
 import { getDb } from '@/db';
-import { courses, documents } from '@/db/schema';
-import { eq, ilike, or } from 'drizzle-orm';
+import { personalMaterials } from '@/db/schema';
+import { eq } from 'drizzle-orm';
+import { supabaseAdmin } from '@/lib/supabase';
+import { saveLearningArtifact } from '@/lib/learning-artifacts';
 import { parseDocumentFromUrl } from '@/lib/document-parser';
 import { retrieveRelevantChunks, formatChunksForPrompt } from '@/lib/rag';
+import { getPersonalMaterials } from '@/lib/firebase-data';
 
 interface SourceItem {
   name: string;
@@ -12,20 +15,69 @@ interface SourceItem {
   type?: string;
 }
 
+const cancelledRequests = new Map<string, number>();
+const CANCEL_EXPIRY_MS = 10 * 60 * 1000;
+
+class RequestAbortedError extends Error {
+  constructor() {
+    super('Request aborted');
+    this.name = 'AbortError';
+  }
+}
+
+function throwIfRequestAborted(request: Request, requestId?: string) {
+  const now = Date.now();
+  for (const [id, cancelledAt] of cancelledRequests) {
+    if (now - cancelledAt > CANCEL_EXPIRY_MS) cancelledRequests.delete(id);
+  }
+  if (request.signal.aborted || (requestId && cancelledRequests.has(requestId))) {
+    throw new RequestAbortedError();
+  }
+}
+
+function parseGeneratedJson(text: string): unknown {
+  const normalized = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+
+  try {
+    return JSON.parse(normalized);
+  } catch {
+    const objectStart = normalized.indexOf('{');
+    const objectEnd = normalized.lastIndexOf('}');
+    if (objectStart >= 0 && objectEnd > objectStart) {
+      return JSON.parse(normalized.slice(objectStart, objectEnd + 1));
+    }
+    throw new Error('Mô hình AI không trả về JSON hợp lệ. Vui lòng thử lại hoặc đổi mô hình.');
+  }
+}
+
 export async function POST(request: Request) {
+  let requestId: string | undefined;
+  let isCancelRequest = false;
   try {
     const body = (await request.json()) as {
+      action?: 'cancel';
+      requestId?: string;
       type?: 'summary' | 'mindmap' | 'flashcards' | 'slides' | 'slide' | 'presentation';
       topic?: string;
       course?: string;
       courseCode?: string;
       courseId?: string | number;
+      userId?: number;
       sourceNames?: string[];
       sources?: SourceItem[];
       level?: 'simple' | 'standard' | 'complex';
       allowExternalSource?: boolean;
       model?: string;
     };
+
+    requestId = body.requestId;
+    isCancelRequest = body.action === 'cancel';
+    if (isCancelRequest) {
+      if (requestId) cancelledRequests.set(requestId, Date.now());
+      return NextResponse.json({ success: true });
+    }
+
+    throwIfRequestAborted(request, requestId);
 
     const toolType = body.type || 'summary';
     const level = body.level || 'standard';
@@ -38,80 +90,93 @@ export async function POST(request: Request) {
 
     const effectiveSourceNames = effectiveSources.map(s => s.name);
 
-    // 1. Gather document context
+    // 1. Gather document context from personal_materials / Moodle
     let documentContext = '';
-    const db = getDb();
     const docMap = new Map<string, string>();
+    const moodleCourseId = Number(body.courseId) || undefined;
 
-    if (db) {
+    if (moodleCourseId) {
       try {
-        let dbDocs: Array<{ id: string; title: string; content: string }> = [];
-        if (body.courseId && typeof body.courseId === 'string' && body.courseId.includes('-')) {
-          dbDocs = await db
-            .select({ id: documents.id, title: documents.title, content: documents.content })
-            .from(documents)
-            .where(eq(documents.courseId, body.courseId))
-            .limit(10);
-        } else if (body.courseCode || body.course) {
-          const matchedCourses = await db
-            .select()
-            .from(courses)
-            .where(
-              or(
-                body.courseCode ? ilike(courses.title, `%${body.courseCode}%`) : undefined,
-                body.course ? ilike(courses.title, `%${body.course.split('(')[0].trim()}%`) : undefined
-              )
-            )
-            .limit(3);
-
-          if (matchedCourses.length > 0) {
-            for (const mc of matchedCourses) {
-              const docs = await db
-                .select({ id: documents.id, title: documents.title, content: documents.content })
-                .from(documents)
-                .where(eq(documents.courseId, mc.id))
-                .limit(5);
-              dbDocs.push(...docs);
+        const mats = await getPersonalMaterials({ moodleCourseId, limit: 10 });
+        if (mats) {
+          for (const mat of mats) {
+            if (mat.storage_url && mat.title && !docMap.has(String(mat.title).toLowerCase())) {
+              try {
+                const text = await parseDocumentFromUrl(String(mat.storage_url), String(mat.title));
+                if (text && text.length > 50) docMap.set(String(mat.title).toLowerCase(), text);
+              } catch {
+                // ignore unavailable material
+              }
             }
           }
         }
+      } catch (firebaseError) {
+        console.warn('Firebase personal_materials query in study-tools:', firebaseError);
+      }
 
-        for (const doc of dbDocs) {
-          if (doc.content && doc.content.length > 50) {
-            docMap.set(doc.title.toLowerCase(), doc.content);
+      if (supabaseAdmin) {
+        try {
+          const { data: mats } = await supabaseAdmin
+            .from('personal_materials')
+            .select('*')
+            .eq('moodle_course_id', moodleCourseId)
+            .limit(10);
+
+          if (mats) {
+            for (const mat of mats) {
+              if (mat.storage_url && !docMap.has(mat.title.toLowerCase())) {
+                try {
+                  const text = await parseDocumentFromUrl(mat.storage_url, mat.title);
+                  if (text && text.length > 50) {
+                    docMap.set(mat.title.toLowerCase(), text);
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+            }
           }
+        } catch (sbErr) {
+          console.warn('Supabase personal_materials query in study-tools:', sbErr);
         }
-      } catch (dbErr) {
-        console.warn('Could not query Supabase documents in study-tools:', dbErr);
+      }
+
+      const db = getDb();
+      if (db && docMap.size === 0) {
+        try {
+          const mats = await db
+            .select()
+            .from(personalMaterials)
+            .where(eq(personalMaterials.moodleCourseId, moodleCourseId))
+            .limit(10);
+
+          for (const mat of mats) {
+            if (mat.storageUrl && !docMap.has(mat.title.toLowerCase())) {
+              try {
+                const text = await parseDocumentFromUrl(mat.storageUrl, mat.title);
+                if (text && text.length > 50) {
+                  docMap.set(mat.title.toLowerCase(), text);
+                }
+              } catch {
+                // ignore
+              }
+            }
+          }
+        } catch (dbErr) {
+          console.warn('Drizzle personal_materials query in study-tools:', dbErr);
+        }
       }
     }
 
     // Parse URL documents if needed
     for (const src of effectiveSources) {
+      throwIfRequestAborted(request, requestId);
       const lowerName = src.name.toLowerCase();
       if (!docMap.has(lowerName) && src.url) {
         try {
           const extractedText = await parseDocumentFromUrl(src.url, src.name);
           if (extractedText && extractedText.trim()) {
             docMap.set(lowerName, extractedText);
-            if (db) {
-              try {
-                let targetCourseId = (body.courseId && typeof body.courseId === 'string' && body.courseId.includes('-')) ? body.courseId : '';
-                if (!targetCourseId) {
-                  const existingCourses = await db.select().from(courses).limit(1);
-                  if (existingCourses.length > 0) targetCourseId = existingCourses[0].id;
-                }
-                if (targetCourseId) {
-                  await db.insert(documents).values({
-                    courseId: targetCourseId,
-                    title: src.name,
-                    content: extractedText.slice(0, 1000000),
-                  });
-                }
-              } catch {
-                // background caching error is non-fatal
-              }
-            }
           }
         } catch {
           // ignore
@@ -238,29 +303,55 @@ Không bao gồm bất kỳ văn bản ngoài hay markdown.`;
 
     // 3. AI Execution via unified model registry
     try {
+      throwIfRequestAborted(request, requestId);
       const result = await generateText(body.model, {
         system: 'Bạn là chuyên gia sư phạm và kiến trúc tri thức. Luôn bảo đảm tuyệt đối tính chính xác lịch sử/khoa học, chống ảo giác và trả về JSON hợp lệ 100%.',
         userPrompt: prompt,
+        signal: request.signal,
         temperature: 0.15,
         jsonMode: true,
       });
 
+      throwIfRequestAborted(request, requestId);
+
       if (result.text) {
-        const parsed = JSON.parse(result.text);
+        const parsed = parseGeneratedJson(result.text) as Record<string, unknown> | unknown[];
         let data: unknown = parsed;
-        if (toolType === 'flashcards') {
+        if (toolType === 'flashcards' && !Array.isArray(parsed)) {
           data = parsed.flashcards || parsed.cards || (Array.isArray(parsed) ? parsed : []);
         } else if (toolType === 'slides' || toolType === 'slide' || toolType === 'presentation') {
-          data = parsed.slides ? parsed : { title: topic, topic, slides: Array.isArray(parsed) ? parsed : [] };
+          data = !Array.isArray(parsed) && parsed.slides
+            ? parsed
+            : { title: topic, topic, slides: Array.isArray(parsed) ? parsed : [] };
         }
-        return NextResponse.json({ data, mode: 'ai', level });
+
+        // Save learning artifact to database
+        throwIfRequestAborted(request, requestId);
+        const numericUserId = body.userId || 4;
+        const targetCourseId = moodleCourseId || 1;
+        const savedArtifact = await saveLearningArtifact({
+          userId: numericUserId,
+          moodleCourseId: targetCourseId,
+          artifactType: toolType,
+          contentData: { name: topic, topic, level, data: data as Record<string, unknown> },
+        }).catch(saveErr => {
+          console.warn('saveLearningArtifact warning in study-tools:', saveErr);
+        });
+
+        return NextResponse.json({ data, mode: 'ai', level, artifactId: savedArtifact?.id || null });
       }
     } catch (err) {
+      if (err instanceof RequestAbortedError || request.signal.aborted) {
+        return new Response(null, { status: 499 });
+      }
       console.warn('AI study-tools generation failed:', err);
     }
 
     return NextResponse.json({ error: 'Không thể tạo học liệu lúc này.' }, { status: 500 });
   } catch (error) {
+    if (error instanceof RequestAbortedError || request.signal.aborted) {
+      return new Response(null, { status: 499 });
+    }
     console.error('Study tool error:', error);
     return NextResponse.json({ error: 'Lỗi xử lý yêu cầu.' }, { status: 500 });
   }

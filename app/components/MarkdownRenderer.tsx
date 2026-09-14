@@ -6,15 +6,18 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
+import { Globe, ExternalLink, BookmarkPlus, Check } from 'lucide-react';
 import 'katex/dist/katex.min.css';
 
 interface MarkdownRendererProps {
   content: string;
+  onAddMaterial?: (item: { title: string; url: string }) => void;
+  savedUrls?: string[];
 }
 
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+export function MarkdownRenderer({ content, onAddMaterial, savedUrls = [] }: MarkdownRendererProps) {
   // Pre-process content:
-  let cleanContent = content
+  let cleanContent = (typeof content === 'string' ? content : '')
     // 1. Unescape literal \n into real newlines
     .replace(/\\n/g, '\n')
     // 2. Fix broken LaTeX escapes like '$\ ' or '\$' that create '$\' artifacts
@@ -22,7 +25,9 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
     // 3. Fix dangling '$\' or '$ \'
     .replace(/\$\s*\\(?!\w)/g, '$')
     // 4. Ensure space after closing bold/code if needed
-    .replace(/\*\*([^*]+)\*\*/g, '**$1**');
+    .replace(/\*\*([^*]+)\*\*/g, '**$1**')
+    // 5. Convert backtick-wrapped URLs into markdown links so they are rendered as interactive links
+    .replace(/`\s*(https?:\/\/[^\s`]+)\s*`/g, '[$1]($1)');
 
   // Convert raw backtick code blocks inside table rows into inline formatted text so they don't break markdown tables
   cleanContent = cleanContent.split('\n').map(line => {
@@ -33,6 +38,47 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
     }
     return line;
   }).join('\n');
+
+  const renderExternalLinkPill = (url: string, label: React.ReactNode) => {
+    const cleanNormUrl = url.trim();
+
+    return (
+      <a
+        href={cleanNormUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="markdown-external-link"
+        title={`Mở liên kết ngoài: ${cleanNormUrl}`}
+        onClick={e => e.stopPropagation()}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          flexDirection: 'row',
+          gap: '5px',
+          color: '#38bdf8',
+          background: 'rgba(14, 165, 233, 0.18)',
+          border: '1px solid rgba(56, 189, 248, 0.45)',
+          padding: '2px 9px',
+          borderRadius: '6px',
+          fontSize: '12.5px',
+          fontWeight: 600,
+          textDecoration: 'underline',
+          textUnderlineOffset: '3px',
+          whiteSpace: 'nowrap',
+          lineHeight: 1.4,
+          boxShadow: '0 1px 4px rgba(0, 0, 0, 0.25)',
+          margin: '2px 4px',
+          verticalAlign: 'middle',
+        }}
+      >
+        <Globe size={13} style={{ color: '#38bdf8', flexShrink: 0, display: 'inline-block' }} />
+        <span className="external-link-text" style={{ color: '#38bdf8', fontWeight: 600 }}>
+          {label}
+        </span>
+        <ExternalLink size={11} style={{ color: '#38bdf8', opacity: 0.85, flexShrink: 0, display: 'inline-block' }} />
+      </a>
+    );
+  };
 
   return (
     <div className="prose-message">
@@ -50,10 +96,23 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           tr: ({ children }) => <tr className="markdown-tr">{children}</tr>,
           th: ({ children }) => <th className="markdown-th">{children}</th>,
           td: ({ children }) => <td className="markdown-td">{children}</td>,
+          a: ({ href, children, ...props }) => {
+            const rawUrl = href || '';
+            const isExternal = rawUrl.startsWith('http://') || rawUrl.startsWith('https://');
+            if (!isExternal) {
+              return <a href={rawUrl} {...props}>{children}</a>;
+            }
+
+            return renderExternalLinkPill(rawUrl, children);
+          },
           code: ({ className, children, ...props }) => {
             const match = /language-(\w+)/.exec(className || '');
             const isInline = !className && typeof children === 'string' && !children.includes('\n');
             if (isInline) {
+              const text = String(children).trim();
+              if (text.startsWith('http://') || text.startsWith('https://')) {
+                return renderExternalLinkPill(text, text);
+              }
               return <code className="markdown-inline-code" {...props}>{children}</code>;
             }
             return (

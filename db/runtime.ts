@@ -18,6 +18,8 @@ export type AppRuntime = {
   ANTHROPIC_API_KEY?: string;
   MOODLE_URL?: string;
   MOODLE_TOKEN?: string;
+  MOODLE_TOKEN_ENCRYPTION_KEY?: string;
+  CRON_SECRET?: string;
 };
 
 function readLocalEnvFiles(): Record<string, string> {
@@ -95,6 +97,8 @@ export function runtimeEnv(): AppRuntime {
     ANTHROPIC_API_KEY: getVar('ANTHROPIC_API_KEY'),
     MOODLE_URL: getVar('MOODLE_URL'),
     MOODLE_TOKEN: getVar('MOODLE_TOKEN'),
+    MOODLE_TOKEN_ENCRYPTION_KEY: getVar('MOODLE_TOKEN_ENCRYPTION_KEY'),
+    CRON_SECRET: getVar('CRON_SECRET'),
   };
 }
 

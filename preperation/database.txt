@@ -1,43 +1,54 @@
--- 2. KHỞI TẠO KIẾN TRÚC MỚI (Lấy Moodle làm trung tâm)
--- Bảng users: Bản sao định tuyến giao diện
-CREATE TABLE users (
-    moodle_user_id INT PRIMARY KEY,
-    role VARCHAR(50) NOT NULL,
-    name VARCHAR(255)
-);
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
 
--- Bảng chat_sessions: Lịch sử đa hội thoại
-CREATE TABLE chat_sessions (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    user_id INT REFERENCES users(moodle_user_id) ON DELETE CASCADE,
-    moodle_course_id INT NOT NULL,
-    messages JSONB DEFAULT '[]'::jsonb,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+CREATE TABLE public.users (
+  moodle_user_id integer NOT NULL,
+  role character varying NOT NULL,
+  name character varying,
+  CONSTRAINT users_pkey PRIMARY KEY (moodle_user_id)
 );
-
--- Bảng personal_materials: Tài liệu cá nhân
-CREATE TABLE personal_materials (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    user_id INT REFERENCES users(moodle_user_id) ON DELETE CASCADE,
-    moodle_course_id INT NOT NULL,
-    title TEXT NOT NULL,
-    storage_url TEXT NOT NULL
+CREATE TABLE public.fcm_tokens (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id integer,
+  token text NOT NULL UNIQUE,
+  device_type character varying,
+  last_used_at timestamp with time zone DEFAULT now(),
+  device_id character varying NOT NULL,
+  CONSTRAINT fcm_tokens_pkey PRIMARY KEY (id),
+  CONSTRAINT fcm_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(moodle_user_id)
 );
-
--- Bảng learning_artifacts: Thành quả học tập từ AI
-CREATE TABLE learning_artifacts (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    user_id INT REFERENCES users(moodle_user_id) ON DELETE CASCADE,
-    moodle_course_id INT NOT NULL,
-    artifact_type VARCHAR(50) NOT NULL, -- 'summary', 'mindmap', 'flashcard'
-    content_data JSONB NOT NULL
+CREATE TABLE public.moodle_credentials (
+  user_id integer NOT NULL,
+  encrypted_token text NOT NULL,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT moodle_credentials_pkey PRIMARY KEY (user_id),
+  CONSTRAINT moodle_credentials_user_id_users_moodle_user_id_fk FOREIGN KEY (user_id) REFERENCES public.users(moodle_user_id)
 );
-
--- Bảng fcm_tokens: Quản lý mã thiết bị để gửi thông báo đẩy
-CREATE TABLE fcm_tokens (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    user_id INT REFERENCES users(moodle_user_id) ON DELETE CASCADE,
-    token TEXT NOT NULL UNIQUE,
-    device_type VARCHAR(50),
-    last_used_at TIMESTAMPTZ DEFAULT NOW()
+CREATE TABLE public.notification_deliveries (
+  user_id integer NOT NULL,
+  event_id integer NOT NULL,
+  event_type character varying NOT NULL,
+  reminder_minutes integer NOT NULL,
+  event_timestamp timestamp with time zone NOT NULL,
+  sent_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT notification_deliveries_pkey PRIMARY KEY (user_id, event_id, event_type, reminder_minutes),
+  CONSTRAINT notification_deliveries_user_id_users_moodle_user_id_fk FOREIGN KEY (user_id) REFERENCES public.users(moodle_user_id)
+);
+CREATE TABLE public.moodle_events (
+  user_id integer NOT NULL,
+  event_id integer NOT NULL,
+  event_type character varying NOT NULL,
+  title character varying NOT NULL,
+  timestart integer NOT NULL,
+  CONSTRAINT moodle_events_pkey PRIMARY KEY (user_id, event_id, event_type)
+);
+CREATE TABLE public.push_queue (
+  id integer NOT NULL DEFAULT nextval('push_queue_id_seq'::regclass),
+  user_id integer NOT NULL,
+  event_id integer NOT NULL,
+  event_type character varying NOT NULL,
+  title character varying NOT NULL,
+  reminder_minutes integer NOT NULL,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT push_queue_pkey PRIMARY KEY (id)
 );

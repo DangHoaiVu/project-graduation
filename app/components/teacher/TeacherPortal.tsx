@@ -42,6 +42,8 @@ import {
   Layers,
   GitFork,
   Layout,
+  GitCompare,
+  PenLine,
 } from 'lucide-react';
 import type { Course, ChatMessage, CitationSource, CourseSourceItem, StudyToolResponse } from '@/app/types';
 import { convertQuestionsToMoodleXml, type QuizQuestionItem } from '@/app/lib/moodle-xml';
@@ -169,6 +171,7 @@ function StudyArtifact({
   selectedSourcesCount,
   onGenerate,
   onReset,
+  onStop,
   copyText,
   notify,
 }: {
@@ -179,6 +182,7 @@ function StudyArtifact({
   selectedSourcesCount: number;
   onGenerate: (level: 'simple' | 'standard' | 'complex', topic: string, allowExternal: boolean) => void;
   onReset: () => void;
+  onStop?: () => void;
   copyText: (s: string) => void;
   notify: (s: string) => void;
 }) {
@@ -208,16 +212,44 @@ function StudyArtifact({
 
   if (loading) {
     return (
-      <div className="artifact artifact-loading">
+      <div className="artifact artifact-loading" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.85rem' }}>
         <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Sparkles size={16} />
         </span>
-        <h3>Đang phân tích tài liệu và khởi tạo {type.toLowerCase()} cấp độ {selectedLevel === 'simple' ? 'Cơ bản' : selectedLevel === 'complex' ? 'Chuyên sâu' : 'Tiêu chuẩn'}…</h3>
+        <h3 style={{ margin: 0, textAlign: 'center' }}>
+          Đang phân tích tài liệu và khởi tạo {type.toLowerCase()} cấp độ {selectedLevel === 'simple' ? 'Cơ bản' : selectedLevel === 'complex' ? 'Chuyên sâu' : 'Tiêu chuẩn'}…
+        </h3>
         <div className="typing">
           <i />
           <i />
           <i />
         </div>
+        {onStop && (
+          <button
+            type="button"
+            onClick={onStop}
+            style={{
+              marginTop: '0.35rem',
+              background: '#ef4444',
+              color: '#fff',
+              border: 'none',
+              padding: '0.5rem 1.25rem',
+              borderRadius: '10px',
+              fontWeight: 600,
+              fontSize: '13px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              boxShadow: '0 4px 14px rgba(239, 68, 68, 0.4)',
+              transition: 'all 0.2s ease',
+            }}
+            title="Dừng khởi tạo học liệu"
+          >
+            <Square size={13} fill="currentColor" />
+            <span>Dừng tạo {type.toLowerCase()}</span>
+          </button>
+        )}
       </div>
     );
   }
@@ -626,9 +658,16 @@ export function TeacherPortal({
   const [quizDocumentText, setQuizDocumentText] = useState('');
   const [quizCount, setQuizCount] = useState<number>(10);
   const [quizDifficulty, setQuizDifficulty] = useState<'easy' | 'normal' | 'hard'>('normal');
-  const [quizQuestionType, setQuizQuestionType] = useState<'multiple_choice' | 'true_false' | 'multiple_select' | 'mixed'>('mixed');
+  const [quizQuestionTypes, setQuizQuestionTypes] = useState<Array<'multiple_choice' | 'true_false' | 'multiple_select' | 'matching' | 'short_answer'>>([
+    'multiple_choice',
+    'true_false',
+    'multiple_select',
+    'matching',
+    'short_answer',
+  ]);
   const quizModel = 'auto';
   const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
+  const teacherQuizAbortRef = useRef<AbortController | null>(null);
   const [generatedQuestions, setGeneratedQuestions] = useState<QuizQuestionItem[]>([]);
   const [xmlContent, setXmlContent] = useState<string>('');
   const [quizNotice, setQuizNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
@@ -647,6 +686,7 @@ export function TeacherPortal({
   const [tool, setTool] = useState('Chat');
   const [artifactsMap, setArtifactsMap] = useState<Record<string, GeneratedArtifact>>({});
   const [artifactLoading, setArtifactLoading] = useState(false);
+  const artifactAbortRef = useRef<AbortController | null>(null);
   const [toast, setToast] = useState('');
 
   // Student/Teacher Resource Upload Modal states
@@ -690,9 +730,9 @@ export function TeacherPortal({
     setTool(toolName);
   };
 
-  // Auto-collapse source panel on compact windows
+  // Auto-collapse source panel on compact/half-monitor windows
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.innerWidth < 880) {
+    if (typeof window !== 'undefined' && window.innerWidth < 1100) {
       setIsSourcePanelCollapsed(true);
     }
   }, []);
@@ -703,6 +743,15 @@ export function TeacherPortal({
       chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [assistantChat, activeTab, tool, assistantLoading]);
+
+  const stopArtifactGeneration = () => {
+    if (artifactAbortRef.current) {
+      artifactAbortRef.current.abort();
+      artifactAbortRef.current = null;
+    }
+    setArtifactLoading(false);
+    notify('Đã dừng tạo học liệu theo yêu cầu.');
+  };
 
   // Generate Tool Artifact (Summary, Mindmap, Flashcards)
   const generateToolArtifact = async (
@@ -726,10 +775,17 @@ export function TeacherPortal({
     const courseTitle = curCourse ? curCourse.name : 'Môn học';
     const effectiveAllowExternal = allowExternal !== undefined ? allowExternal : allowExternalSource;
 
+    if (artifactAbortRef.current) {
+      artifactAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    artifactAbortRef.current = controller;
+
     try {
       const res = await fetch('/api/study-tools', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           type: apiType,
           topic: topic || courseTitle,
@@ -755,8 +811,14 @@ export function TeacherPortal({
         },
       }));
     } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') {
+        return;
+      }
       notify(e instanceof Error ? e.message : 'Không thể tạo học liệu.');
     } finally {
+      if (artifactAbortRef.current === controller) {
+        artifactAbortRef.current = null;
+      }
       setArtifactLoading(false);
     }
   };
@@ -1616,7 +1678,25 @@ export function TeacherPortal({
   // --------------------------------------------------------------------------
   // Tab 2: AI Quiz Generator Handlers
   // --------------------------------------------------------------------------
+  const stopTeacherQuizGeneration = () => {
+    if (teacherQuizAbortRef.current) {
+      teacherQuizAbortRef.current.abort();
+      teacherQuizAbortRef.current = null;
+    }
+    setIsGeneratingQuiz(false);
+    setQuizNotice({
+      type: 'info',
+      message: 'Đã dừng biên soạn câu hỏi theo yêu cầu.',
+    });
+  };
+
   const generateQuiz = async () => {
+    if (teacherQuizAbortRef.current) {
+      teacherQuizAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    teacherQuizAbortRef.current = controller;
+
     setIsGeneratingQuiz(true);
     setQuizNotice(null);
     try {
@@ -1624,6 +1704,7 @@ export function TeacherPortal({
       const effectiveTopic = selectedCourse?.name || 'Ngân hàng câu hỏi trắc nghiệm';
       const res = await fetch('/api/teacher/quiz/generate', {
         method: 'POST',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           course: selectedCourse?.name || 'Khóa học',
@@ -1632,7 +1713,8 @@ export function TeacherPortal({
           documentText: quizDocumentText,
           count: quizCount,
           difficulty: quizDifficulty,
-          questionType: quizQuestionType,
+          questionType: quizQuestionTypes.length === 1 ? quizQuestionTypes[0] : 'mixed',
+          questionTypes: quizQuestionTypes,
           model: quizModel,
         }),
       });
@@ -1649,12 +1731,18 @@ export function TeacherPortal({
         type: 'success',
         message: `Đã biên soạn thành công ${data.count} câu hỏi trắc nghiệm chuẩn Moodle XML! Bạn có thể tải file hoặc chỉnh sửa trực tiếp.`,
       });
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        return;
+      }
       setQuizNotice({
         type: 'error',
         message: err instanceof Error ? err.message : 'Lỗi khi tạo câu hỏi.',
       });
     } finally {
+      if (teacherQuizAbortRef.current === controller) {
+        teacherQuizAbortRef.current = null;
+      }
       setIsGeneratingQuiz(false);
     }
   };
@@ -1832,6 +1920,16 @@ export function TeacherPortal({
       {/* ==================================================================== */}
       {activeTab === 'assistant' && (
         <div className={`tutor-layout ${isSourcePanelCollapsed ? 'source-collapsed' : ''}`} style={{ flex: '1 1 0%', minHeight: 0, height: '100%' }}>
+          {/* Backdrop for source drawer on narrow/half screens */}
+          {!isSourcePanelCollapsed && (
+            <div
+              className="source-drawer-backdrop"
+              onClick={() => setIsSourcePanelCollapsed(true)}
+              title="Đóng bảng tài liệu (Esc)"
+              aria-label="Đóng bảng tài liệu"
+            />
+          )}
+
           {/* Source panel */}
           <aside className={`source-panel ${isSourcePanelCollapsed ? 'collapsed' : ''}`}>
             <div className="source-panel-header">
@@ -1913,40 +2011,6 @@ export function TeacherPortal({
                 Thêm nguồn tài liệu (PDF, Word, Web)
               </button>
             </div>
-
-            <div className="source-panel-footer">
-              <div
-                className={`grounded interactive-switch ${allowExternalSource ? 'external-on' : ''}`}
-                onClick={() => {
-                  setAllowExternalSource(prev => {
-                    const next = !prev;
-                    notify(
-                      next
-                        ? 'Đã bật: Cho phép liên hệ kiến thức thực tiễn ngoài giáo trình'
-                        : 'Đã bật: Chế độ bám sát nghiêm ngặt tài liệu môn học'
-                    );
-                    return next;
-                  });
-                }}
-                style={{ cursor: 'pointer' }}
-                title="Nhấp để bật/tắt quyền dùng nguồn kiến thức mở rộng bên ngoài"
-              >
-                <div className="grounded-header">
-                  <div className="grounded-header-left">
-                    {allowExternalSource ? <Globe size={15} style={{ color: '#38bdf8' }} /> : <Lock size={15} style={{ color: '#94a3b8' }} />}
-                    <strong className="grounded-title">{allowExternalSource ? 'Nguồn mở rộng' : 'Bám sát tài liệu'}</strong>
-                  </div>
-                  <span className={`unified-status-chip ${allowExternalSource ? 'on' : 'off'}`}>
-                    {allowExternalSource ? 'BẬT' : 'TẮT'}
-                  </span>
-                </div>
-                <p className="grounded-subtitle">
-                  {allowExternalSource
-                    ? 'AI kết hợp giáo trình với kiến thức thực tiễn và công nghệ hiện đại.'
-                    : 'AI phân tích nghiêm ngặt chỉ dựa trên các tài liệu đã chọn.'}
-                </p>
-              </div>
-            </div>
           </aside>
 
           {/* Chat / Artifact panel */}
@@ -1961,8 +2025,8 @@ export function TeacherPortal({
                     title="Mở danh sách tài liệu môn học"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                   >
-                    <Folder size={14} />
-                    <span></span>
+                    <Folder size={14} style={{ color: '#a78bfa' }} />
+                    <span className="expand-source-text">Nguồn tài liệu</span>
                     <span className="source-count-badge">{selectedSourceNames.length}</span>
                   </button>
                 )}
@@ -2111,6 +2175,36 @@ export function TeacherPortal({
                   />
                   <div className="chat-compose-footer">
                     <div className="chat-compose-chips">
+                      {/* External Sources Toggle Chip */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAllowExternalSource(prev => {
+                            const next = !prev;
+                            notify(
+                              next
+                                ? 'Đã bật: Cho phép liên hệ kiến thức thực tiễn ngoài giáo trình'
+                                : 'Đã bật: Chế độ bám sát nghiêm ngặt tài liệu môn học'
+                            );
+                            return next;
+                          });
+                        }}
+                        className={`mode-indicator-chip external-source-chip ${allowExternalSource ? 'active-external' : ''}`}
+                        title={
+                          allowExternalSource
+                            ? 'Chế độ mở rộng: AI kết hợp giáo trình với kiến thức thực tiễn ngoài giáo trình (Bấm để chuyển sang Bám sát tài liệu)'
+                            : 'Chế độ bám sát: AI phân tích nghiêm ngặt chỉ dựa trên các tài liệu đã chọn (Bấm để bật Nguồn mở rộng)'
+                        }
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                      >
+                        {allowExternalSource ? (
+                          <Globe size={13} style={{ color: '#38bdf8' }} />
+                        ) : (
+                          <Lock size={13} style={{ color: '#94a3b8' }} />
+                        )}
+                        <span>{allowExternalSource ? 'Nguồn ngoài: BẬT' : 'Bám sát tài liệu'}</span>
+                      </button>
+
                       {/* Answer Style Selector (Concise vs Detailed) */}
                       <button
                         type="button"
@@ -2195,6 +2289,7 @@ export function TeacherPortal({
                   selectedSourcesCount={selectedSourceNames.length}
                   onGenerate={(lvl, top, ext) => void generateToolArtifact(tool, lvl, top, ext)}
                   onReset={() => resetToolArtifact(tool)}
+                  onStop={stopArtifactGeneration}
                   copyText={copyText}
                   notify={notify}
                 />
@@ -3256,25 +3351,70 @@ export function TeacherPortal({
               </p>
             </div>
 
-            {/* 1. Question Format (Full Line) */}
+            {/* 1. Question Format (Multi-Select) */}
             <div>
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.5rem' }}>
-                1. ĐỊNH DẠNG CÂU HỎI (QUESTION FORMAT):
-              </label>
-              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(auto-fit, minmax(140px, 1fr))' : 'repeat(auto-fit, minmax(210px, 1fr))', gap: '0.65rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '8px' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: '#cfc8ff', margin: 0 }}>
+                  1. ĐỊNH DẠNG CÂU HỎI (CHỌN 1 HOẶC NHIỀU ĐỊNH DẠNG TÙY Ý):
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '0.75rem', color: '#9894ad' }}>
+                    Đã chọn: <strong style={{ color: '#a594fd' }}>{quizQuestionTypes.length}/5</strong> dạng
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const all: Array<'multiple_choice' | 'true_false' | 'multiple_select' | 'matching' | 'short_answer'> = [
+                        'multiple_choice',
+                        'true_false',
+                        'multiple_select',
+                        'matching',
+                        'short_answer',
+                      ];
+                      setQuizQuestionTypes(prev => (prev.length === all.length ? ['multiple_choice'] : all));
+                    }}
+                    style={{
+                      padding: '3px 10px',
+                      borderRadius: '6px',
+                      background: 'rgba(124, 109, 242, 0.15)',
+                      border: '1px solid rgba(124, 109, 242, 0.35)',
+                      color: '#cfc8ff',
+                      fontSize: '0.75rem',
+                      cursor: 'pointer',
+                      fontWeight: 500,
+                    }}
+                  >
+                    {quizQuestionTypes.length === 5 ? 'Chỉ chọn 1 đáp án' : 'Chọn tất cả (5 dạng)'}
+                  </button>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(auto-fit, minmax(140px, 1fr))' : 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.65rem' }}>
                 {[
-                  { id: 'mixed', label: 'Kết hợp (Mixed)', icon: Sparkles, desc: 'Xen kẽ cả 1 lựa chọn, Đúng/Sai & Nhiều đáp án' },
-                  { id: 'multiple_choice', label: '1 Lựa chọn (A/B/C/D)', icon: HelpCircle, desc: 'Chuẩn 4 phương án, 1 đáp án đúng' },
-                  { id: 'true_false', label: 'Đúng / Sai (True/False)', icon: BookX, desc: 'Phán đoán tính đúng/sai của nhận định' },
-                  { id: 'multiple_select', label: 'Chọn nhiều đáp án', icon: CheckSquare, desc: 'Có từ 2 đến 3 đáp án đúng (Multi-answer)' },
+                  { id: 'multiple_choice' as const, label: '1 Lựa chọn (A/B/C/D)', icon: HelpCircle, desc: 'Chuẩn 4 phương án, 1 đáp án đúng' },
+                  { id: 'true_false' as const, label: 'Đúng / Sai (True/False)', icon: BookX, desc: 'Phán đoán tính đúng/sai của nhận định' },
+                  { id: 'multiple_select' as const, label: 'Chọn nhiều đáp án', icon: CheckSquare, desc: 'Có từ 2 đến 3 đáp án đúng (Multi-answer)' },
+                  { id: 'matching' as const, label: 'Nối cặp (Matching)', icon: GitCompare, desc: 'Ghép khái niệm, thuật ngữ với định nghĩa tương ứng' },
+                  { id: 'short_answer' as const, label: 'Trả lời ngắn (Short answer)', icon: PenLine, desc: 'Điền từ khóa, thuật ngữ ngắn gọn chính xác' },
                 ].map(item => {
-                  const isSelected = quizQuestionType === item.id;
+                  const isSelected = quizQuestionTypes.includes(item.id);
                   const Icon = item.icon;
                   return (
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => setQuizQuestionType(item.id as 'multiple_choice' | 'true_false' | 'multiple_select' | 'mixed')}
+                      onClick={() => {
+                        setQuizQuestionTypes(prev => {
+                          if (prev.includes(item.id)) {
+                            if (prev.length === 1) {
+                              notify('Cần chọn ít nhất 1 định dạng câu hỏi.');
+                              return prev;
+                            }
+                            return prev.filter(t => t !== item.id);
+                          } else {
+                            return [...prev, item.id];
+                          }
+                        });
+                      }}
                       style={{
                         padding: isMobile ? '0.65rem 0.75rem' : '0.85rem 1rem',
                         borderRadius: '12px',
@@ -3290,10 +3430,29 @@ export function TeacherPortal({
                         gap: '0.25rem',
                       }}
                     >
-                      <strong style={{ fontSize: isMobile ? '0.88rem' : '0.94rem', color: isSelected ? '#fff' : '#c4c1d6', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Icon size={14} />
-                        <span>{item.label}</span>
-                      </strong>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                        <strong style={{ fontSize: isMobile ? '0.88rem' : '0.94rem', color: isSelected ? '#fff' : '#c4c1d6', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <Icon size={14} />
+                          <span>{item.label}</span>
+                        </strong>
+                        <span
+                          style={{
+                            width: '16px',
+                            height: '16px',
+                            borderRadius: '4px',
+                            border: isSelected ? '1.5px solid #a594fd' : '1px solid rgba(255, 255, 255, 0.2)',
+                            background: isSelected ? '#7c6df2' : 'transparent',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '10px',
+                            color: '#fff',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {isSelected ? '✓' : ''}
+                        </span>
+                      </div>
                       <small style={{ fontSize: isMobile ? '0.72rem' : '0.76rem', color: isSelected ? '#a594fd' : '#6b6684', lineHeight: 1.3 }}>
                         {item.desc}
                       </small>
@@ -3442,42 +3601,84 @@ export function TeacherPortal({
                 Tệp xuất ra đạt chuẩn <strong>Moodle XML</strong> có sẵn CDATA, feedback, penalty và fraction 100%.
               </div>
 
-              <button
-                type="button"
-                disabled={isGeneratingQuiz}
-                onClick={generateQuiz}
-                style={{
-                  padding: '0.75rem 1.6rem',
-                  borderRadius: '10px',
-                  border: 'none',
-                  background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
-                  color: '#fff',
-                  fontWeight: 600,
-                  fontSize: '0.94rem',
-                  cursor: isGeneratingQuiz ? 'not-allowed' : 'pointer',
-                  opacity: isGeneratingQuiz ? 0.7 : 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '0.5rem',
-                  boxShadow: '0 4px 18px rgba(124, 109, 242, 0.45)',
-                  transition: 'all 0.2s ease',
-                  width: isMobile ? '100%' : 'auto',
-                  minHeight: '46px',
-                }}
-              >
-                {isGeneratingQuiz ? (
-                  <>
+              {isGeneratingQuiz ? (
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', width: isMobile ? '100%' : 'auto' }}>
+                  <button
+                    type="button"
+                    disabled
+                    style={{
+                      padding: '0.75rem 1.4rem',
+                      borderRadius: '10px',
+                      border: 'none',
+                      background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
+                      color: '#fff',
+                      fontWeight: 600,
+                      fontSize: '0.94rem',
+                      cursor: 'not-allowed',
+                      opacity: 0.75,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.5rem',
+                      minHeight: '46px',
+                      flex: 1,
+                    }}
+                  >
                     <Sparkles size={16} />
                     <span>Đang biên soạn câu hỏi...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={16} />
-                    <span>Tạo ngân hàng câu hỏi Moodle XML ({quizCount} câu)</span>
-                  </>
-                )}
-              </button>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={stopTeacherQuizGeneration}
+                    style={{
+                      padding: '0.75rem 1.4rem',
+                      borderRadius: '10px',
+                      border: 'none',
+                      background: '#ef4444',
+                      color: '#fff',
+                      fontWeight: 600,
+                      fontSize: '0.94rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '6px',
+                      boxShadow: '0 4px 14px rgba(239, 68, 68, 0.4)',
+                      minHeight: '46px',
+                    }}
+                    title="Dừng tạo câu hỏi"
+                  >
+                    <Square size={14} fill="currentColor" />
+                    <span>Dừng</span>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={generateQuiz}
+                  style={{
+                    padding: '0.75rem 1.6rem',
+                    borderRadius: '10px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #7c6df2, #5a49d7)',
+                    color: '#fff',
+                    fontWeight: 600,
+                    fontSize: '0.94rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.5rem',
+                    boxShadow: '0 4px 18px rgba(124, 109, 242, 0.45)',
+                    transition: 'all 0.2s ease',
+                    width: isMobile ? '100%' : 'auto',
+                    minHeight: '46px',
+                  }}
+                >
+                  <Sparkles size={16} />
+                  <span>Tạo ngân hàng câu hỏi Moodle XML ({quizCount} câu)</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -3491,11 +3692,20 @@ export function TeacherPortal({
                 background:
                   quizNotice.type === 'success'
                     ? 'rgba(32, 191, 169, 0.15)'
+                    : quizNotice.type === 'info'
+                    ? 'rgba(148, 163, 184, 0.15)'
                     : 'rgba(239, 68, 68, 0.15)',
-                color: quizNotice.type === 'success' ? '#20bfa9' : '#ef4444',
+                color:
+                  quizNotice.type === 'success'
+                    ? '#20bfa9'
+                    : quizNotice.type === 'info'
+                    ? '#94a3b8'
+                    : '#ef4444',
                 border: `1px solid ${
                   quizNotice.type === 'success'
                     ? 'rgba(32, 191, 169, 0.4)'
+                    : quizNotice.type === 'info'
+                    ? 'rgba(148, 163, 184, 0.4)'
                     : 'rgba(239, 68, 68, 0.4)'
                 }`,
               }}
@@ -3606,6 +3816,8 @@ export function TeacherPortal({
               {generatedQuestions.map((q, idx) => {
                 const isMulti = q.type === 'multiselect';
                 const isTF = q.type === 'truefalse';
+                const isMatching = q.type === 'matching';
+                const isShortAnswer = q.type === 'shortanswer';
 
                 return (
                   <div
@@ -3644,13 +3856,37 @@ export function TeacherPortal({
                             fontSize: '0.72rem',
                             padding: '0.2rem 0.5rem',
                             borderRadius: '6px',
-                            background: isMulti ? 'rgba(168, 85, 247, 0.2)' : isTF ? 'rgba(56, 189, 248, 0.2)' : 'rgba(124, 109, 242, 0.2)',
-                            color: isMulti ? '#d8b4fe' : isTF ? '#7dd3fc' : '#c4c1d6',
+                            background: isMulti
+                              ? 'rgba(168, 85, 247, 0.2)'
+                              : isTF
+                              ? 'rgba(56, 189, 248, 0.2)'
+                              : isMatching
+                              ? 'rgba(234, 179, 8, 0.2)'
+                              : isShortAnswer
+                              ? 'rgba(236, 72, 153, 0.2)'
+                              : 'rgba(124, 109, 242, 0.2)',
+                            color: isMulti
+                              ? '#d8b4fe'
+                              : isTF
+                              ? '#7dd3fc'
+                              : isMatching
+                              ? '#fde047'
+                              : isShortAnswer
+                              ? '#f472b6'
+                              : '#c4c1d6',
                             fontWeight: 600,
                             border: '1px solid rgba(255, 255, 255, 0.1)',
                           }}
                         >
-                          {isMulti ? 'Nhiều đáp án' : isTF ? 'Đúng / Sai' : '1 Lựa chọn'}
+                          {isMulti
+                            ? 'Nhiều đáp án'
+                            : isTF
+                            ? 'Đúng / Sai'
+                            : isMatching
+                            ? 'Nối cặp (Matching)'
+                            : isShortAnswer
+                            ? 'Trả lời ngắn'
+                            : '1 Lựa chọn'}
                         </span>
                       </div>
 
@@ -3697,79 +3933,68 @@ export function TeacherPortal({
                       }}
                     />
 
-                    {/* Choices / Options */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', marginBottom: '0.65rem' }}>
-                      {q.options.map((opt, optIdx) => {
-                        const isCorrect = isMulti
-                          ? (q.correctAnswerIndices || [0, 1]).includes(optIdx)
-                          : optIdx === (q.correctAnswerIndex ?? 0);
-                        const optLabel = isTF
-                          ? (optIdx === 0 ? 'Đúng' : 'Sai')
-                          : isMulti
-                          ? (isCorrect ? '[x] ' + ['A', 'B', 'C', 'D', 'E'][optIdx] : '[ ] ' + ['A', 'B', 'C', 'D', 'E'][optIdx])
-                          : ['A', 'B', 'C', 'D', 'E'][optIdx];
-
-                        return (
+                    {/* Matching Pairs Editor */}
+                    {isMatching && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem', marginBottom: '0.65rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.78rem', color: '#fde047', fontWeight: 600 }}>
+                            Các cặp nối (Ghép Cột Trái với Cột Phải):
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setGeneratedQuestions(curr =>
+                                curr.map((item, i) => {
+                                  if (i !== idx) return item;
+                                  return {
+                                    ...item,
+                                    pairs: [...(item.pairs || []), { left: '', right: '' }],
+                                  };
+                                })
+                              );
+                            }}
+                            style={{
+                              padding: '2px 8px',
+                              borderRadius: '6px',
+                              border: '1px dashed rgba(234, 179, 8, 0.5)',
+                              background: 'transparent',
+                              color: '#fde047',
+                              fontSize: '0.75rem',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            + Thêm cặp
+                          </button>
+                        </div>
+                        {(q.pairs || []).map((pair, pIdx) => (
                           <div
-                            key={optIdx}
+                            key={pIdx}
                             style={{
                               display: 'flex',
                               alignItems: 'center',
                               gap: '0.45rem',
-                              padding: '0.35rem 0.55rem',
+                              padding: '0.45rem 0.6rem',
                               borderRadius: '8px',
-                              background: isCorrect ? 'rgba(32, 191, 169, 0.08)' : 'transparent',
-                              border: isCorrect
-                                ? '1px solid rgba(32, 191, 169, 0.4)'
-                                : '1px solid rgba(255, 255, 255, 0.05)',
+                              background: 'rgba(234, 179, 8, 0.07)',
+                              border: '1px solid rgba(234, 179, 8, 0.25)',
+                              flexWrap: isMobile ? 'wrap' : 'nowrap',
                             }}
                           >
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setGeneratedQuestions(curr =>
-                                  curr.map((item, i) => {
-                                    if (i !== idx) return item;
-                                    if (isMulti) {
-                                      const currList = item.correctAnswerIndices || [0, 1];
-                                      const nextList = currList.includes(optIdx)
-                                        ? currList.filter(n => n !== optIdx)
-                                        : [...currList, optIdx].sort((a, b) => a - b);
-                                      return { ...item, correctAnswerIndices: nextList.length > 0 ? nextList : [optIdx] };
-                                    } else {
-                                      return { ...item, correctAnswerIndex: optIdx };
-                                    }
-                                  })
-                                );
-                              }}
-                              style={{
-                                padding: '0.3rem 0.55rem',
-                                borderRadius: '6px',
-                                border: 'none',
-                                background: isCorrect ? '#20bfa9' : '#26233a',
-                                color: isCorrect ? '#fff' : '#9894ad',
-                                fontWeight: 700,
-                                fontSize: '0.8rem',
-                                cursor: 'pointer',
-                                minWidth: isTF ? '48px' : '34px',
-                                flexShrink: 0,
-                              }}
-                              title={isCorrect ? 'Đáp án đúng (Nhấp để bỏ chọn)' : 'Nhấp để đặt làm đáp án đúng'}
-                            >
-                              {optLabel}
-                            </button>
-
+                            <span style={{ fontSize: '0.78rem', color: '#fde047', fontWeight: 700, minWidth: '22px' }}>
+                              #{pIdx + 1}
+                            </span>
                             <input
                               type="text"
-                              value={opt}
+                              placeholder="Mục bên trái..."
+                              value={pair.left}
                               onChange={e => {
                                 const val = e.target.value;
                                 setGeneratedQuestions(curr =>
                                   curr.map((item, i) => {
                                     if (i !== idx) return item;
-                                    const newOpts = [...item.options];
-                                    newOpts[optIdx] = val;
-                                    return { ...item, options: newOpts };
+                                    const newPairs = [...(item.pairs || [])];
+                                    newPairs[pIdx] = { ...newPairs[pIdx], left: val };
+                                    return { ...item, pairs: newPairs };
                                   })
                                 );
                               }}
@@ -3780,20 +4005,274 @@ export function TeacherPortal({
                                 background: '#141220',
                                 color: '#f3f2f8',
                                 border: '1px solid #26233a',
-                                fontSize: '16px',
-                                minWidth: 0,
+                                fontSize: '15px',
+                                minWidth: isMobile ? '100%' : '140px',
                               }}
                             />
-
-                            {isCorrect && (
-                              <span style={{ fontSize: '0.74rem', color: '#20bfa9', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                                {isMobile ? '✓' : '✓ Đúng'}
-                              </span>
+                            <span style={{ color: '#9894ad', fontSize: '0.9rem', padding: '0 2px' }}>⇄</span>
+                            <input
+                              type="text"
+                              placeholder="Khái niệm nối tương ứng..."
+                              value={pair.right}
+                              onChange={e => {
+                                const val = e.target.value;
+                                setGeneratedQuestions(curr =>
+                                  curr.map((item, i) => {
+                                    if (i !== idx) return item;
+                                    const newPairs = [...(item.pairs || [])];
+                                    newPairs[pIdx] = { ...newPairs[pIdx], right: val };
+                                    return { ...item, pairs: newPairs };
+                                  })
+                                );
+                              }}
+                              style={{
+                                flex: 1,
+                                padding: '0.35rem 0.55rem',
+                                borderRadius: '6px',
+                                background: '#141220',
+                                color: '#f3f2f8',
+                                border: '1px solid #26233a',
+                                fontSize: '15px',
+                                minWidth: isMobile ? '100%' : '140px',
+                              }}
+                            />
+                            {(q.pairs || []).length > 2 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setGeneratedQuestions(curr =>
+                                    curr.map((item, i) => {
+                                      if (i !== idx) return item;
+                                      return {
+                                        ...item,
+                                        pairs: (item.pairs || []).filter((_, pi) => pi !== pIdx),
+                                      };
+                                    })
+                                  );
+                                }}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#ef4444',
+                                  cursor: 'pointer',
+                                  padding: '2px 6px',
+                                  fontSize: '13px',
+                                }}
+                                title="Xóa cặp này"
+                              >
+                                ✕
+                              </button>
                             )}
                           </div>
-                        );
-                      })}
-                    </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Short Answer Editor */}
+                    {isShortAnswer && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem', marginBottom: '0.65rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.78rem', color: '#f472b6', fontWeight: 600 }}>
+                            Các đáp án được chấp nhận (Hệ thống tính đúng khi sinh viên gõ 1 trong các từ này):
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setGeneratedQuestions(curr =>
+                                curr.map((item, i) => {
+                                  if (i !== idx) return item;
+                                  return {
+                                    ...item,
+                                    acceptedAnswers: [...(item.acceptedAnswers || []), ''],
+                                  };
+                                })
+                              );
+                            }}
+                            style={{
+                              padding: '2px 8px',
+                              borderRadius: '6px',
+                              border: '1px dashed rgba(236, 72, 153, 0.5)',
+                              background: 'transparent',
+                              color: '#f472b6',
+                              fontSize: '0.75rem',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            + Thêm đáp án
+                          </button>
+                        </div>
+                        {(q.acceptedAnswers || []).map((ans, aIdx) => (
+                          <div
+                            key={aIdx}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.45rem',
+                              padding: '0.35rem 0.55rem',
+                              borderRadius: '8px',
+                              background: 'rgba(236, 72, 153, 0.07)',
+                              border: '1px solid rgba(236, 72, 153, 0.25)',
+                            }}
+                          >
+                            <span style={{ fontSize: '0.78rem', color: '#f472b6', fontWeight: 700, minWidth: '24px' }}>
+                              #{aIdx + 1}
+                            </span>
+                            <input
+                              type="text"
+                              placeholder="Đáp án hoặc từ khóa chấp nhận..."
+                              value={ans}
+                              onChange={e => {
+                                const val = e.target.value;
+                                setGeneratedQuestions(curr =>
+                                  curr.map((item, i) => {
+                                    if (i !== idx) return item;
+                                    const newAns = [...(item.acceptedAnswers || [])];
+                                    newAns[aIdx] = val;
+                                    return { ...item, acceptedAnswers: newAns };
+                                  })
+                                );
+                              }}
+                              style={{
+                                flex: 1,
+                                padding: '0.35rem 0.55rem',
+                                borderRadius: '6px',
+                                background: '#141220',
+                                color: '#f3f2f8',
+                                border: '1px solid #26233a',
+                                fontSize: '15px',
+                              }}
+                            />
+                            {(q.acceptedAnswers || []).length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setGeneratedQuestions(curr =>
+                                    curr.map((item, i) => {
+                                      if (i !== idx) return item;
+                                      return {
+                                        ...item,
+                                        acceptedAnswers: (item.acceptedAnswers || []).filter((_, ai) => ai !== aIdx),
+                                      };
+                                    })
+                                  );
+                                }}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#ef4444',
+                                  cursor: 'pointer',
+                                  padding: '2px 6px',
+                                  fontSize: '13px',
+                                }}
+                                title="Xóa đáp án này"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Choices / Options for Choice-based questions */}
+                    {!isMatching && !isShortAnswer && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', marginBottom: '0.65rem' }}>
+                        {(q.options || []).map((opt, optIdx) => {
+                          const isCorrect = isMulti
+                            ? (q.correctAnswerIndices || [0, 1]).includes(optIdx)
+                            : optIdx === (q.correctAnswerIndex ?? 0);
+                          const optLabel = isTF
+                            ? (optIdx === 0 ? 'Đúng' : 'Sai')
+                            : isMulti
+                            ? (isCorrect ? '[x] ' + ['A', 'B', 'C', 'D', 'E'][optIdx] : '[ ] ' + ['A', 'B', 'C', 'D', 'E'][optIdx])
+                            : ['A', 'B', 'C', 'D', 'E'][optIdx];
+
+                          return (
+                            <div
+                              key={optIdx}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.45rem',
+                                padding: '0.35rem 0.55rem',
+                                borderRadius: '8px',
+                                background: isCorrect ? 'rgba(32, 191, 169, 0.08)' : 'transparent',
+                                border: isCorrect
+                                  ? '1px solid rgba(32, 191, 169, 0.4)'
+                                  : '1px solid rgba(255, 255, 255, 0.05)',
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setGeneratedQuestions(curr =>
+                                    curr.map((item, i) => {
+                                      if (i !== idx) return item;
+                                      if (isMulti) {
+                                        const currList = item.correctAnswerIndices || [0, 1];
+                                        const nextList = currList.includes(optIdx)
+                                          ? currList.filter(n => n !== optIdx)
+                                          : [...currList, optIdx].sort((a, b) => a - b);
+                                        return { ...item, correctAnswerIndices: nextList.length > 0 ? nextList : [optIdx] };
+                                      } else {
+                                        return { ...item, correctAnswerIndex: optIdx };
+                                      }
+                                    })
+                                  );
+                                }}
+                                style={{
+                                  padding: '0.3rem 0.55rem',
+                                  borderRadius: '6px',
+                                  border: 'none',
+                                  background: isCorrect ? '#20bfa9' : '#26233a',
+                                  color: isCorrect ? '#fff' : '#9894ad',
+                                  fontWeight: 700,
+                                  fontSize: '0.8rem',
+                                  cursor: 'pointer',
+                                  minWidth: isTF ? '48px' : '34px',
+                                  flexShrink: 0,
+                                }}
+                                title={isCorrect ? 'Đáp án đúng (Nhấp để bỏ chọn)' : 'Nhấp để đặt làm đáp án đúng'}
+                              >
+                                {optLabel}
+                              </button>
+
+                              <input
+                                type="text"
+                                value={opt}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setGeneratedQuestions(curr =>
+                                    curr.map((item, i) => {
+                                      if (i !== idx) return item;
+                                      const newOpts = [...(item.options || [])];
+                                      newOpts[optIdx] = val;
+                                      return { ...item, options: newOpts };
+                                    })
+                                  );
+                                }}
+                                style={{
+                                  flex: 1,
+                                  padding: '0.35rem 0.55rem',
+                                  borderRadius: '6px',
+                                  background: '#141220',
+                                  color: '#f3f2f8',
+                                  border: '1px solid #26233a',
+                                  fontSize: '16px',
+                                  minWidth: 0,
+                                }}
+                              />
+
+                              {isCorrect && (
+                                <span style={{ fontSize: '0.74rem', color: '#20bfa9', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                  {isMobile ? '✓' : '✓ Đúng'}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     {/* Explanation */}
                     <div>

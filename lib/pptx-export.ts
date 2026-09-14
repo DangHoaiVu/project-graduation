@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import PptxGenJS from 'pptxgenjs';
 
 export interface SlideItem {
   slideNumber?: number;
@@ -15,6 +16,144 @@ export interface SlideDeckData {
   slides: SlideItem[];
 }
 
+/**
+ * Exports a slide deck as a real PowerPoint file using PptxGenJS.
+ */
+export async function exportSlidesToPptx(
+  deck: SlideDeckData,
+  courseTitle: string
+): Promise<void> {
+  const pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_WIDE';
+  pptx.author = 'LMS Assistant';
+  pptx.company = 'LMS Assistant';
+  pptx.subject = deck.topic || courseTitle;
+  pptx.title = deck.title || courseTitle;
+
+  const slides = deck.slides && deck.slides.length > 0 ? deck.slides : [
+    {
+      title: deck.title || courseTitle,
+      subtitle: `Môn học: ${courseTitle}`,
+      bullets: ['Nội dung bài giảng đang được cập nhật.'],
+      notes: 'Slide tổng quan mở đầu bài giảng.',
+    },
+  ];
+
+  slides.forEach((slideData, index) => {
+    const slide = pptx.addSlide();
+    const isTitleSlide = index === 0;
+    const title = slideData.title || `Trang ${index + 1}`;
+    const subtitle = slideData.subtitle || (isTitleSlide ? courseTitle : '');
+
+    slide.background = { color: isTitleSlide ? '0B0F19' : '0F172A' };
+    slide.addShape(pptx.ShapeType.rect, {
+      x: 0,
+      y: 0,
+      w: 13.333,
+      h: 0.1,
+      line: { color: '7C6DF2', transparency: 100 },
+      fill: { color: '7C6DF2' },
+    });
+
+    slide.addText(title, {
+      x: 0.8,
+      y: isTitleSlide ? 2 : 0.7,
+      w: 11.7,
+      h: isTitleSlide ? 0.8 : 0.5,
+      align: isTitleSlide ? 'center' : 'left',
+      fontFace: 'Aptos Display',
+      fontSize: isTitleSlide ? 28 : 22,
+      bold: true,
+      color: 'FFFFFF',
+      margin: 0,
+      breakLine: false,
+      fit: 'shrink',
+    });
+
+    if (subtitle) {
+      slide.addText(subtitle, {
+        x: 0.8,
+        y: isTitleSlide ? 3 : 1.35,
+        w: 11.7,
+        h: 0.35,
+        align: isTitleSlide ? 'center' : 'left',
+        fontFace: 'Aptos',
+        fontSize: 12,
+        italic: true,
+        color: '94A3B8',
+        margin: 0,
+        fit: 'shrink',
+      });
+    }
+
+    if (!isTitleSlide) {
+      const bulletText = (slideData.bullets || []).map(text => ({
+        text,
+        options: { bullet: { indent: 18 }, hanging: 4 },
+      }));
+
+      if (bulletText.length > 0) {
+        slide.addText(bulletText, {
+          x: 0.8,
+          y: 2.05,
+          w: 11.7,
+          h: 3.9,
+          fontFace: 'Aptos',
+          fontSize: 18,
+          color: 'F1F5F9',
+          breakLine: true,
+          paraSpaceAfter: 12,
+          margin: 0,
+          valign: 'top',
+          fit: 'shrink',
+        });
+      }
+
+      if (slideData.keyTakeaway) {
+        slide.addText([
+          { text: 'Điểm cốt lõi: ', options: { bold: true, color: 'A594FD' } },
+          { text: slideData.keyTakeaway, options: { italic: true, color: 'CBD5E1' } },
+        ], {
+          x: 0.8,
+          y: 5.75,
+          w: 11.7,
+          h: 0.4,
+          fontFace: 'Aptos',
+          fontSize: 13,
+          margin: 0,
+          fit: 'shrink',
+        });
+      }
+    }
+
+    slide.addText(`${courseTitle} · Trang ${index + 1} / ${slides.length}`, {
+      x: 0.8,
+      y: 6.55,
+      w: 11.7,
+      h: 0.2,
+      align: 'right',
+      fontFace: 'Aptos',
+      fontSize: 9,
+      color: '64748B',
+      margin: 0,
+    });
+
+    if (slideData.notes) {
+      slide.addNotes(slideData.notes);
+    }
+  });
+
+  const sanitizedName = (deck.title || courseTitle || 'Slide_Bai_Giang')
+    .replace(/[^a-zA-Z0-9_\u00C0-\u024F\u1E00-\u1EFF]/g, '_')
+    .slice(0, 40);
+  try {
+    await pptx.writeFile({ fileName: `${sanitizedName}_Slide.pptx` });
+  } catch (error) {
+    console.warn('PptxGenJS export failed, using the legacy browser fallback:', error);
+    await exportSlidesToPptxLegacy(deck, courseTitle);
+  }
+}
+
 function escapeXml(unsafe: string): string {
   if (!unsafe) return '';
   return unsafe
@@ -29,7 +168,7 @@ function escapeXml(unsafe: string): string {
  * Builds a genuine, valid OpenXML PowerPoint (.pptx) file using JSZip.
  * Supported across Microsoft PowerPoint, Google Slides, LibreOffice, and Apple Keynote.
  */
-export async function exportSlidesToPptx(
+async function exportSlidesToPptxLegacy(
   deck: SlideDeckData,
   courseTitle: string
 ): Promise<void> {

@@ -2,10 +2,12 @@ import { NextResponse } from 'next/server';
 import { runtimeEnv } from '@/db/runtime';
 import { generateText } from '@/models/registry';
 import { parseMoodleQuestion, ParsedMoodleQuestion, cleanAnswerText } from '@/lib/moodle-quiz-parser';
-import { saveLearningArtifact, getLearningArtifacts, getQuizAnalysisByAttempt } from '@/lib/learning-artifacts';
+import { getLearningArtifacts, getQuizAnalysisByAttempt, saveLearningArtifact } from '@/lib/learning-artifacts';
 import { getDb } from '@/db';
-import { courses, documents } from '@/db/schema';
-import { eq, ilike, or } from 'drizzle-orm';
+import { personalMaterials } from '@/db/schema';
+import { eq } from 'drizzle-orm';
+import { getPersonalMaterials } from '@/lib/firebase-data';
+import { supabaseAdmin } from '@/lib/supabase';
 import type { QuizAnalysisData } from '@/app/types';
 
 function sanitizeQuestionsAnalysis(questions: any[]) {
@@ -23,6 +25,24 @@ function sanitizeAnalysis(data: any): any {
     ...data,
     questionsAnalysis: sanitizeQuestionsAnalysis(data.questionsAnalysis),
   };
+}
+
+function parseModelJson(text: string): Record<string, unknown> | null {
+  const normalized = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try {
+    const parsed = JSON.parse(normalized);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    const start = normalized.indexOf('{');
+    const end = normalized.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+    try {
+      const parsed = JSON.parse(normalized.slice(start, end + 1));
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
 }
 
 export async function GET(request: Request) {
@@ -189,34 +209,47 @@ export async function POST(request: Request) {
 
     // 3. Gather Course Documents Context for Adaptive Guidance
     let docContext = '';
-    const db = getDb();
-    if (db && (body.courseId || body.courseCode || body.courseName)) {
+    const numericCourseId = body.courseId ? Number(body.courseId) : undefined;
+    if (numericCourseId) {
       try {
-        const matchedCourses = await db
-          .select()
-          .from(courses)
-          .where(
-            or(
-              body.courseId ? eq(courses.moodleCourseId, body.courseId) : undefined,
-              body.courseCode ? ilike(courses.title, `%${body.courseCode}%`) : undefined,
-              body.courseName ? ilike(courses.title, `%${body.courseName.split('(')[0].trim()}%`) : undefined
-            )
-          )
-          .limit(2);
-
-        if (matchedCourses.length > 0) {
-          const docs = await db
-            .select({ title: documents.title, content: documents.content })
-            .from(documents)
-            .where(eq(documents.courseId, matchedCourses[0].id))
-            .limit(4);
-
-          docContext = docs
-            .map(d => `[Tài liệu: ${d.title}]\n${d.content.slice(0, 2500)}`)
-            .join('\n\n');
+        const mats = await getPersonalMaterials({ moodleCourseId: numericCourseId, limit: 4 });
+        if (mats && mats.length > 0) {
+          docContext = mats.map(m => `[Tài liệu: ${m.title}]`).join('\n');
         }
-      } catch (err) {
-        console.warn('Could not load course docs for quiz analysis:', err);
+      } catch (firebaseError) {
+        console.warn('Firebase course docs warning for quiz analysis:', firebaseError);
+      }
+
+      if (supabaseAdmin) {
+        try {
+          const { data: mats } = await supabaseAdmin
+            .from('personal_materials')
+            .select('title, storage_url')
+            .eq('moodle_course_id', numericCourseId)
+            .limit(4);
+          if (mats && mats.length > 0) {
+            docContext = mats.map(m => `[Tài liệu: ${m.title}]`).join('\n');
+          }
+        } catch (sbErr) {
+          console.warn('Supabase course docs warning for quiz analysis:', sbErr);
+        }
+      }
+      if (!docContext) {
+        const db = getDb();
+        if (db) {
+          try {
+            const mats = await db
+              .select({ title: personalMaterials.title })
+              .from(personalMaterials)
+              .where(eq(personalMaterials.moodleCourseId, numericCourseId))
+              .limit(4);
+            if (mats.length > 0) {
+              docContext = mats.map(m => `[Tài liệu: ${m.title}]`).join('\n');
+            }
+          } catch (dbErr) {
+            console.warn('Drizzle course docs warning for quiz analysis:', dbErr);
+          }
+        }
       }
     }
 
@@ -300,13 +333,19 @@ Không kèm markdown hay văn bản ngoài JSON.`;
       });
 
       if (aiResult.text) {
-        const parsed = JSON.parse(aiResult.text);
-        aiResponse = {
-          overview: parsed.overview || aiResponse.overview,
-          weakTopics: Array.isArray(parsed.weakTopics) ? parsed.weakTopics : [],
-          recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : aiResponse.recommendations,
-          questionsAnalysis: Array.isArray(parsed.questionsAnalysis) ? parsed.questionsAnalysis : [],
-        };
+        const parsed = parseModelJson(aiResult.text);
+        if (parsed) {
+          aiResponse = {
+            overview: typeof parsed.overview === 'string' ? parsed.overview : aiResponse.overview,
+            weakTopics: Array.isArray(parsed.weakTopics) ? parsed.weakTopics.filter((item): item is string => typeof item === 'string') : [],
+            recommendations: Array.isArray(parsed.recommendations)
+              ? parsed.recommendations.filter((item): item is string => typeof item === 'string')
+              : aiResponse.recommendations,
+            questionsAnalysis: Array.isArray(parsed.questionsAnalysis) ? parsed.questionsAnalysis as Array<{ slot: number; diagnosedReason: string }> : [],
+          };
+        } else {
+          console.warn('AI Quiz Diagnosis returned non-JSON content; using fallback analysis.');
+        }
       }
     } catch (aiErr) {
       console.warn('AI Quiz Diagnosis error:', aiErr);
@@ -353,20 +392,20 @@ Không kèm markdown hay văn bản ngoài JSON.`;
       analyzedAt: new Date().toISOString(),
     };
 
-    // 7. Save to Supabase learning_artifacts table
-    const targetUserId = body.userId || attemptInfo.userid || 4;
     const targetCourseId = Number(body.courseId || 0);
-
     const savedArtifact = await saveLearningArtifact({
-      userId: targetUserId,
+      userId: body.userId || attemptInfo.userid || 4,
       userName: body.userName,
       moodleCourseId: targetCourseId,
       artifactType: 'quiz_analysis',
-      contentData: analysisData,
+      contentData: {
+        name: `Chẩn đoán bài kiểm tra: ${analysisData.quizName}`,
+        ...analysisData,
+      },
     });
 
-    if (savedArtifact && (savedArtifact as any).id) {
-      analysisData.id = (savedArtifact as any).id;
+    if (savedArtifact?.id) {
+      analysisData.id = String(savedArtifact.id);
     }
 
     return NextResponse.json({
