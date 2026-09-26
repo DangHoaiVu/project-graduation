@@ -3,7 +3,7 @@ import { generateText } from '@/models/registry';
 import { supabaseAdmin } from '@/lib/supabase';
 import { parseDocumentFromUrl } from '@/lib/document-parser';
 import {
-  retrieveRelevantChunks,
+  scoreAndSelectChunks,
   formatChunksForPrompt,
   chunkDocument,
   type DocumentChunk,
@@ -247,7 +247,7 @@ export async function POST(request: Request) {
 
     if (filteredCandidateChunks.length > 0) {
       try {
-        const relevantChunks = await retrieveRelevantChunks(question, filteredCandidateChunks, {
+        const relevantChunks = scoreAndSelectChunks(filteredCandidateChunks, question, {
           topK: 8,
           maxTotalChars: 20000,
           minSimilarity: 0.12,
