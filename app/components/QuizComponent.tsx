@@ -374,6 +374,7 @@ export function QuizComponent({
           mark: '0.00',
           maxmark: 1,
           feedback: q.explanation,
+          explanation: q.explanation,
           diagnosedReason: q.explanation || 'Sinh viên cần xem lại lý thuyết định nghĩa phần này.',
         };
       }),

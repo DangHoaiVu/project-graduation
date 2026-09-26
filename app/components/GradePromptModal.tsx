@@ -195,19 +195,6 @@ export function GradePromptModal({
                 <h3 style={{ margin: 0, fontSize: '15.5px', fontWeight: 700, letterSpacing: '-0.2px' }}>
                   Tùy Chọn Phản Hồi Gia Sư AI
                 </h3>
-                <span
-                  style={{
-                    fontSize: '11px',
-                    padding: '2px 8px',
-                    borderRadius: '7px',
-                    background: `${currentRoute.badgeColor}22`,
-                    color: currentRoute.badgeColor,
-                    border: `1px solid ${currentRoute.badgeColor}55`,
-                    fontWeight: 600,
-                  }}
-                >
-                  {currentRoute.badgeText}
-                </span>
               </div>
               <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>
                 <strong style={{ color: '#e2e8f0' }}>{result.name}</strong> • Môn: {result.courseName} • Điểm:{' '}

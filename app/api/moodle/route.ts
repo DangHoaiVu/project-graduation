@@ -30,11 +30,11 @@ export async function GET(request: Request) {
   };
   try {
     const site=await call<{userid:number;fullname:string;username?:string;userpictureurl?:string;userissiteadmin?:boolean}>('core_webservice_get_site_info');
-    const courses=await call<Array<{id:number;shortname:string;fullname:string;progress?:number}>>('core_enrol_get_users_courses',{userid:String(site.userid)});
+    const courses=await call<Array<{id:number;shortname:string;fullname:string;progress?:number;startdate?:number;lastaccess?:number}>>('core_enrol_get_users_courses',{userid:String(site.userid)});
     const [upcoming, gradeResults, courseEnrolledUsers, moodleUrlsRes, moodlePagesRes, ...contents] = await Promise.all([
-      call<{events?:Array<{id:number;name:string;timestart:number;url?:string;course?:{fullname?:string}}>}>('core_calendar_get_calendar_upcoming_view'),
+      call<{events?:Array<{id:number;name:string;description?:string;timestart:number;url?:string;course?:{fullname?:string};modulename?:string;eventtype?:string}>}>('core_calendar_get_calendar_upcoming_view'),
       Promise.allSettled(
-        courses.slice(0, 20).map(course =>
+        courses.slice(0, 50).map(course =>
           call<{
             usergrades?: Array<{
               courseid: number;
@@ -66,7 +66,7 @@ export async function GET(request: Request) {
         )
       ),
       Promise.allSettled(
-        courses.slice(0, 20).map(course =>
+        courses.slice(0, 50).map(course =>
           call<Array<{ id: number; roles?: Array<{ roleid: number; shortname: string }> }>>('core_enrol_get_enrolled_users', {
             courseid: String(course.id),
           })
@@ -74,13 +74,13 @@ export async function GET(request: Request) {
       ),
       call<{ urls?: Array<{ id: number; coursemodule: number; course: number; name: string; externalurl: string }> }>(
         'mod_url_get_urls_by_courses',
-        courses.slice(0, 20).reduce((acc, c, i) => ({ ...acc, [`courseids[${i}]`]: String(c.id) }), {})
+        courses.slice(0, 50).reduce((acc, c, i) => ({ ...acc, [`courseids[${i}]`]: String(c.id) }), {})
       ).catch(() => ({ urls: [] })),
       call<{ pages?: Array<{ id: number; coursemodule: number; course: number; name: string; content?: string }> }>(
         'mod_page_get_pages_by_courses',
-        courses.slice(0, 20).reduce((acc, c, i) => ({ ...acc, [`courseids[${i}]`]: String(c.id) }), {})
+        courses.slice(0, 50).reduce((acc, c, i) => ({ ...acc, [`courseids[${i}]`]: String(c.id) }), {})
       ).catch(() => ({ pages: [] })),
-      ...courses.slice(0,20).map(course=>call<Array<{modules?:Array<{id:number;name:string;modname:string;contents?:Array<{filename:string;fileurl:string}>}>}>>('core_course_get_contents',{courseid:String(course.id)}).catch(()=>[])),
+      ...courses.slice(0,50).map(course=>call<Array<{id?:number;name?:string;section?:number;modules?:Array<{id:number;name:string;modname:string;contents?:Array<{filename:string;fileurl:string}>}>}>>('core_course_get_contents',{courseid:String(course.id)}).catch(()=>[])),
     ]);
 
     const externalUrlMap = new Map<number, string>();
@@ -120,6 +120,10 @@ export async function GET(request: Request) {
               courseCode: courses[index]?.shortname,
               courseName: courses[index]?.fullname,
               module: module.name,
+              moduleId: module.id,
+              fileId: (file as any).fileid ? Number((file as any).fileid) : Number(module.id),
+              sectionId: section.id,
+              sectionName: section.name,
               type: file.filename.split('.').pop()?.toUpperCase() || 'FILE',
               name: file.filename,
               url: file.fileurl ? `${file.fileurl}${file.fileurl.includes('?') ? '&' : '?'}token=${encodeURIComponent(moodleToken)}` : '',
@@ -140,6 +144,10 @@ export async function GET(request: Request) {
                 courseCode: courses[index]?.shortname,
                 courseName: courses[index]?.fullname,
                 module: module.name,
+                moduleId: module.id,
+                fileId: Number(module.id),
+                sectionId: section.id,
+                sectionName: section.name,
                 type: 'LINK',
                 name: module.name,
                 url: targetUrl,
@@ -161,6 +169,11 @@ export async function GET(request: Request) {
         courseName: event.course?.fullname ?? 'Moodle',
         timestamp: event.timestart * 1000,
         url: event.url,
+        modulename: event.modulename,
+        eventtype: event.eventtype,
+        description: event.description
+          ? event.description.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&nbsp;/g, ' ').trim()
+          : undefined,
       }));
     const avatarUrl = moodleToken
       ? `/api/moodle/avatar?token=${encodeURIComponent(moodleToken)}&v=${site.userid}`
@@ -200,6 +213,18 @@ export async function GET(request: Request) {
             item.itemname.trim() === '' ||
             item.graderaw === null ||
             item.graderaw === undefined
+          ) {
+            continue;
+          }
+
+          const itemModule = (item.itemmodule || '').toLowerCase();
+          const itemName = (item.itemname || '').toLowerCase();
+          // Exclude attendance items from gradebook/examResults
+          if (
+            itemModule === 'attendance' ||
+            itemModule.includes('attendance') ||
+            itemName.includes('attendance') ||
+            itemName.includes('điểm danh')
           ) {
             continue;
           }
@@ -316,31 +341,32 @@ export async function GET(request: Request) {
     const mappedCourses = courses.map((course, idx) => {
       let role = 'student';
       let isTeacher = false;
-      const enrolledRes = courseEnrolledUsers[idx];
-      if (enrolledRes && enrolledRes.status === 'fulfilled' && Array.isArray(enrolledRes.value)) {
-        const me = enrolledRes.value.find(u => u.id === site.userid);
-        if (me?.roles && me.roles.length > 0) {
-          const teacherRole = me.roles.find(r =>
-            ['editingteacher', 'teacher'].includes(r.shortname)
-          );
-          if (teacherRole) {
-            isTeacher = true;
-            role = teacherRole.shortname;
-          } else if (me.roles.some(r => ['manager', 'coursecreator', 'admin'].includes(r.shortname)) || Boolean(site.userissiteadmin)) {
-            isTeacher = true;
-            role = 'editingteacher';
-          } else {
-            role = 'student';
-            isTeacher = false;
-          }
-        } else if (site.userissiteadmin) {
-          isTeacher = true;
-          role = 'editingteacher';
-        }
-      } else if (site.userissiteadmin) {
+
+      if (site.userid === 2 || Boolean(site.userissiteadmin)) {
         isTeacher = true;
         role = 'editingteacher';
+      } else {
+        const enrolledRes = courseEnrolledUsers[idx];
+        if (enrolledRes && enrolledRes.status === 'fulfilled' && Array.isArray(enrolledRes.value)) {
+          const me = enrolledRes.value.find(u => u.id === site.userid);
+          if (me?.roles && me.roles.length > 0) {
+            const teacherRole = me.roles.find(r =>
+              ['editingteacher', 'teacher'].includes(r.shortname)
+            );
+            if (teacherRole) {
+              isTeacher = true;
+              role = teacherRole.shortname;
+            } else if (me.roles.some(r => ['manager', 'coursecreator', 'admin'].includes(r.shortname))) {
+              isTeacher = true;
+              role = 'editingteacher';
+            } else {
+              role = 'student';
+              isTeacher = false;
+            }
+          }
+        }
       }
+
       return {
         ...course,
         role,

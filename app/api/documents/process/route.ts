@@ -123,10 +123,10 @@ export async function POST(request: Request) {
         await supabaseAdmin.from('users').upsert(
           {
             moodle_user_id: userId,
-            role: 'student',
-            name: userName,
+            role: userId === 2 ? 'teacher' : 'student',
+            name: userName || (userId === 2 ? 'Admin User' : 'Sinh viên'),
           },
-          { onConflict: 'moodle_user_id' }
+          { onConflict: 'moodle_user_id', ignoreDuplicates: true }
         );
 
         const { data, error: sbError } = await supabaseAdmin

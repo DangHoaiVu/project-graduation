@@ -13,6 +13,57 @@ export interface ParsedMoodleQuestion {
   studentAnswer: string;
   rightAnswer: string;
   feedback: string;
+  explanation?: string;
+}
+
+export function extractDivContent(html: string, className: string): string {
+  if (!html) return '';
+  const re = new RegExp(`<div[^>]*class=["']?[^"'>]*\\b${className}\\b[^"'>]*["']?[^>]*>`, 'i');
+  const match = html.match(re);
+  if (!match || match.index === undefined) return '';
+
+  const tagStart = match.index;
+  const contentStart = tagStart + match[0].length;
+
+  let depth = 1;
+  let cursor = contentStart;
+
+  while (cursor < html.length && depth > 0) {
+    const nextOpen = html.indexOf('<div', cursor);
+    const nextClose = html.indexOf('</div>', cursor);
+
+    if (nextOpen !== -1 && (nextClose === -1 || nextOpen < nextClose)) {
+      depth++;
+      cursor = nextOpen + 4;
+    } else if (nextClose !== -1) {
+      depth--;
+      if (depth === 0) {
+        return html.slice(contentStart, nextClose);
+      }
+      cursor = nextClose + 6;
+    } else {
+      break;
+    }
+  }
+
+  return '';
+}
+
+export function isBoilerplateFeedback(text: string): boolean {
+  if (!text) return true;
+  const clean = text.replace(/^[✓✗\s]+/, '').trim().toLowerCase();
+  const boilerplates = [
+    'chưa chính xác. hãy xem lại lời giải thích.',
+    'chưa chính xác.',
+    'câu trả lời của bạn đúng một phần.',
+    'câu trả lời của bạn đúng.',
+    'chính xác! bạn đã chọn đủ các phương án đúng.',
+    'chính xác!',
+    'your answer is correct.',
+    'your answer is incorrect.',
+    'your answer is partially correct.',
+  ];
+  return boilerplates.some(b => clean === b || clean.startsWith(b));
 }
 
 export function extractPlainText(html: string): string {
@@ -84,33 +135,65 @@ export function parseMoodleQuestion(rawQuestion: {
 
   // 1. Question text from .qtext
   let questionText = '';
-  const qtextMatch =
-    clean.match(/<div class="qtext"[^>]*>([\s\S]*?)<\/div>\s*<fieldset/i) ||
-    clean.match(/<div class="qtext"[^>]*>([\s\S]*?)<\/fieldset>/i) ||
-    clean.match(/<div class="qtext"[^>]*>([\s\S]*?)<\/div>/i);
-  if (qtextMatch) {
-    questionText = extractPlainText(qtextMatch[1]);
+  const rawQtext = extractDivContent(clean, 'qtext');
+  if (rawQtext) {
+    questionText = extractPlainText(rawQtext);
+  } else {
+    const qtextMatch =
+      clean.match(/<div class="qtext"[^>]*>([\s\S]*?)<\/div>\s*<fieldset/i) ||
+      clean.match(/<div class="qtext"[^>]*>([\s\S]*?)<\/fieldset>/i) ||
+      clean.match(/<div class="qtext"[^>]*>([\s\S]*?)<\/div>/i);
+    if (qtextMatch) {
+      questionText = extractPlainText(qtextMatch[1]);
+    }
   }
 
   // 2. Right answer from .rightanswer
   let rightAnswer = '';
-  const rightMatch = clean.match(/<div class="rightanswer"[^>]*>([\s\S]*?)<\/div>/i);
-  if (rightMatch) {
-    rightAnswer = extractPlainText(rightMatch[1])
-      .replace(/^The correct answer is:?\s*/i, '')
-      .replace(/^The correct answers are:?\s*/i, '')
+  const rawRight = extractDivContent(clean, 'rightanswer');
+  const rightAnswerHtml = rawRight || (clean.match(/<div class="rightanswer"[^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? '');
+  if (rightAnswerHtml) {
+    rightAnswer = extractPlainText(rightAnswerHtml)
+      .replace(/^The correct answers? (?:is|are):?\s*/i, '')
       .replace(/^Câu trả lời đúng là:?\s*/i, '')
       .replace(/^Đáp án đúng là:?\s*/i, '')
       .trim();
   }
 
-  // 3. Feedback from .generalfeedback or .specificfeedback
-  let feedback = '';
-  const genFbMatch = clean.match(/<div class="generalfeedback"[^>]*>([\s\S]*?)<\/div>/i);
-  const specFbMatch = clean.match(/<div class="specificfeedback"[^>]*>([\s\S]*?)<\/div>/i);
-  if (genFbMatch) feedback += extractPlainText(genFbMatch[1]) + ' ';
-  if (specFbMatch) feedback += extractPlainText(specFbMatch[1]);
-  feedback = feedback.trim();
+  // 3. Official Explanation / Feedback
+  // Moodle nests .clearfix inside .generalfeedback, and option-level .specificfeedback.
+  let explanation = '';
+  const rawGenFb = extractDivContent(clean, 'generalfeedback');
+  const genFb = extractPlainText(rawGenFb);
+
+  const rawSpecFb = extractDivContent(clean, 'specificfeedback');
+  const specFb = extractPlainText(rawSpecFb);
+
+  if (genFb && !isBoilerplateFeedback(genFb)) {
+    explanation = genFb;
+  } else if (specFb && !isBoilerplateFeedback(specFb)) {
+    explanation = specFb.replace(/^[✓✗\s]+/, '').trim();
+  }
+
+  // Option-level specific feedback (e.g. per-choice explanation)
+  if (!explanation) {
+    const answerBlockMatch = clean.match(/<div class="answer">([\s\S]*?)<\/div>\s*<\/fieldset>/i);
+    if (answerBlockMatch) {
+      const optionRows = answerBlockMatch[1].split(/<div class="(?:r0|r1)/i);
+      for (const row of optionRows) {
+        if (/checked="checked"|checked\b/i.test(row)) {
+          const rawOptFb = extractDivContent(row, 'specificfeedback');
+          const optFb = extractPlainText(rawOptFb).replace(/^[✓✗\s]+/, '').trim();
+          if (optFb && !isBoilerplateFeedback(optFb)) {
+            explanation = optFb;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  const feedback = explanation || genFb || (isBoilerplateFeedback(specFb) ? '' : specFb);
 
   // 4. Student answer
   const studentChoices: string[] = [];
@@ -148,6 +231,7 @@ export function parseMoodleQuestion(rawQuestion: {
     studentAnswer,
     rightAnswer,
     feedback,
+    explanation,
   };
 }
 

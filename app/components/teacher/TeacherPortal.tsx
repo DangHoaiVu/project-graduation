@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Bot,
   Table,
@@ -44,14 +45,18 @@ import {
   Layout,
   GitCompare,
   PenLine,
+  Megaphone,
+  Bell,
+  Clock,
 } from 'lucide-react';
-import type { Course, ChatMessage, CitationSource, CourseSourceItem, StudyToolResponse } from '@/app/types';
+import type { Course, ChatMessage, CitationSource, CourseSourceItem, StudyToolResponse, ManualEventItem } from '@/app/types';
 import { convertQuestionsToMoodleXml, type QuizQuestionItem } from '@/app/lib/moodle-xml';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
 import { InteractiveMindmap } from '@/app/components/InteractiveMindmap';
 import { SlidePresentation } from '@/app/components/SlidePresentation';
 import type { SlideDeckData } from '@/lib/pptx-export';
 import { exportSummaryToDocx, copyRichHtmlForWord } from '@/lib/export-utils';
+import { cleanSummaryData } from '@/lib/summary-cleaner';
 
 /* ── Flashcards Component ────────────────────────────────── */
 
@@ -412,7 +417,7 @@ function StudyArtifact({
   }
 
   // Summary
-  const summary = artifact.data as { title: string; overview: string; points: string[] };
+  const summary = cleanSummaryData(artifact.data as { title: string; overview: string; points: string[] });
   const text = `${summary.title}\n\n${summary.overview}\n\n${(summary.points ?? []).map(x => `• ${x}`).join('\n')}`;
 
   const handleExportDocx = async () => {
@@ -591,8 +596,58 @@ interface TeacherPortalProps {
   initialCourseId?: number | string;
   hideHeader?: boolean;
   sources?: Array<{ name: string; url?: string; type?: string; courseId?: number | string; courseCode?: string }>;
-  initialTab?: 'assistant' | 'grades' | 'quiz';
-  onTabChange?: (tab: 'assistant' | 'grades' | 'quiz') => void;
+  initialTab?: 'assistant' | 'grades' | 'quiz' | 'notifications';
+  onTabChange?: (tab: 'assistant' | 'grades' | 'quiz' | 'notifications') => void;
+}
+
+function TeacherModal({
+  title,
+  onClose,
+  children,
+  width = 'min(820px, 94vw)',
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  width?: string;
+}) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
+
+  if (!mounted || typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div
+      className="modal-backdrop"
+      onMouseDown={e => e.target === e.currentTarget && onClose()}
+    >
+      <section className="modal" style={{ width, maxWidth: '94vw', maxHeight: '88vh' }}>
+        <header>
+          <h2>{title}</h2>
+          <button type="button" onClick={onClose} aria-label="Đóng">×</button>
+        </header>
+        <div className="modal-body-scrollable" style={{ padding: '0.75rem 0 0' }}>
+          {children}
+        </div>
+      </section>
+    </div>,
+    document.body
+  );
 }
 
 export function TeacherPortal({
@@ -605,7 +660,7 @@ export function TeacherPortal({
   initialTab = 'assistant',
   onTabChange,
 }: TeacherPortalProps) {
-  const [activeTab, setActiveTab] = useState<'assistant' | 'grades' | 'quiz'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'assistant' | 'grades' | 'quiz' | 'notifications'>(initialTab);
   const [selectedCourseId, setSelectedCourseId] = useState<number | string>(
     initialCourseId || courses.find(c => c.isTeacher)?.id || courses[0]?.id || 1
   );
@@ -673,6 +728,7 @@ export function TeacherPortal({
   const [quizNotice, setQuizNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [showXmlModal, setShowXmlModal] = useState(false);
   const [showGuideModal, setShowGuideModal] = useState(false);
+  const [quizAllowExternalSource, setQuizAllowExternalSource] = useState(false);
 
   // --------------------------------------------------------------------------
   // Tab 3: Teacher AI Assistant Chat & Study Tools states
@@ -719,6 +775,129 @@ export function TeacherPortal({
   const notify = (text: string) => {
     setToast(text);
     window.setTimeout(() => setToast(''), 2600);
+  };
+
+  // --------------------------------------------------------------------------
+  // Tab 4: Manual Notifications states & handlers
+  // --------------------------------------------------------------------------
+  const [manualEvents, setManualEvents] = useState<ManualEventItem[]>([]);
+  const [manualEventsLoading, setManualEventsLoading] = useState(false);
+  const [notifTitle, setNotifTitle] = useState('');
+  const [notifDeliverTime, setNotifDeliverTime] = useState('');
+  const [notifDetails, setNotifDetails] = useState('');
+  const [selectedReminders, setSelectedReminders] = useState<number[]>([60, 0]);
+  const [customReminderInput, setCustomReminderInput] = useState('');
+  const [customReminderUnit, setCustomReminderUnit] = useState<'minutes' | 'hours' | 'days'>('hours');
+  const [createNotifLoading, setCreateNotifLoading] = useState(false);
+
+  const fetchTeacherManualEvents = useCallback(async () => {
+    if (!selectedCourseId) return;
+    try {
+      setManualEventsLoading(true);
+      const res = await fetch(`/api/teacher/notifications?courseId=${selectedCourseId}`);
+      if (res.ok) {
+        const data = (await res.json()) as { success?: boolean; events?: ManualEventItem[]; error?: string };
+        if (data.success && Array.isArray(data.events)) {
+          setManualEvents(data.events);
+        }
+      }
+    } catch (err) {
+      console.warn('Lỗi lấy danh sách thông báo thủ công:', err);
+    } finally {
+      setManualEventsLoading(false);
+    }
+  }, [selectedCourseId]);
+
+  useEffect(() => {
+    if (activeTab === 'notifications') {
+      void fetchTeacherManualEvents();
+    }
+  }, [activeTab, fetchTeacherManualEvents]);
+
+  const handleToggleReminder = (minutes: number) => {
+    setSelectedReminders(prev =>
+      prev.includes(minutes) ? prev.filter(m => m !== minutes) : [...prev, minutes].sort((a, b) => b - a)
+    );
+  };
+
+  const handleAddCustomReminder = () => {
+    const val = parseFloat(customReminderInput.trim());
+    if (isNaN(val) || val <= 0) {
+      notify('Vui lòng nhập giá trị thời gian hợp lệ (> 0)');
+      return;
+    }
+    let multiplier = 1;
+    if (customReminderUnit === 'hours') multiplier = 60;
+    else if (customReminderUnit === 'days') multiplier = 1440;
+
+    const mins = Math.round(val * multiplier);
+    if (!selectedReminders.includes(mins)) {
+      setSelectedReminders(prev => [...prev, mins].sort((a, b) => b - a));
+    }
+    setCustomReminderInput('');
+  };
+
+  const handleCreateManualNotification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!notifTitle.trim()) {
+      notify('Vui lòng nhập tiêu đề thông báo');
+      return;
+    }
+    if (!notifDeliverTime) {
+      notify('Vui lòng chọn thời gian diễn ra sự kiện');
+      return;
+    }
+    if (selectedReminders.length === 0) {
+      notify('Vui lòng chọn ít nhất 1 mốc nhắc nhở');
+      return;
+    }
+
+    try {
+      setCreateNotifLoading(true);
+      const res = await fetch('/api/teacher/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          courseId: selectedCourseId,
+          title: notifTitle.trim(),
+          deliverTime: notifDeliverTime,
+          eventDetails: notifDetails.trim(),
+          customReminders: selectedReminders,
+        }),
+      });
+
+      const data = (await res.json()) as { success?: boolean; error?: string };
+      if (res.ok && data.success) {
+        notify('Đã tạo và lên lịch phát thông báo thành công!');
+        setNotifTitle('');
+        setNotifDeliverTime('');
+        setNotifDetails('');
+        setSelectedReminders([60, 0]);
+        void fetchTeacherManualEvents();
+      } else {
+        notify(data.error || 'Không thể tạo thông báo');
+      }
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Lỗi kết nối tới máy chủ');
+    } finally {
+      setCreateNotifLoading(false);
+    }
+  };
+
+  const handleDeleteManualNotification = async (id: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn hủy và xóa thông báo này?')) return;
+    try {
+      const res = await fetch(`/api/teacher/notifications?id=${id}`, { method: 'DELETE' });
+      const data = (await res.json()) as { success?: boolean; error?: string };
+      if (res.ok && data.success) {
+        notify('Đã hủy thông báo thành công');
+        setManualEvents(prev => prev.filter(item => item.id !== id));
+      } else {
+        notify(data.error || 'Không thể xóa thông báo');
+      }
+    } catch {
+      notify('Lỗi xóa thông báo');
+    }
   };
 
   const copyText = async (text: string) => {
@@ -858,6 +1037,8 @@ export function TeacherPortal({
           content = await uploadFile.text();
         }
 
+        let uploadedUrl = '';
+        let uploadedId = '';
         try {
           const formData = new FormData();
           formData.append('file', uploadFile);
@@ -865,21 +1046,35 @@ export function TeacherPortal({
           formData.append('courseId', courseCode);
           if (courseId) formData.append('moodleCourseId', String(courseId));
           if (content) formData.append('content', content);
+          formData.append('uploadSource', 'teacher');
 
-          await fetch('/api/documents/process', {
+          const procRes = await fetch('/api/documents/process', {
             method: 'POST',
             body: formData,
           });
+          if (procRes.ok) {
+            const procData = await procRes.json();
+            uploadedUrl = procData?.fileUrl || procData?.material?.storageUrl || procData?.material?.storage_url || '';
+            uploadedId = procData?.material?.id ? String(procData.material.id) : '';
+            if (procData?.contentPreview && !content) {
+              content = procData.contentPreview;
+            }
+          }
         } catch (err) {
           console.warn('Document indexing note:', err);
         }
 
         const sizeStr = (uploadFile.size / (1024 * 1024)).toFixed(1) + ' MB';
         const newItem: CourseSourceItem = {
+          id: uploadedId || `upload-${Date.now()}`,
           name: fileName,
           type,
           sizeOrPages: `Tệp đã nạp · ${sizeStr}`,
           courseCode,
+          courseId: courseId ? Number(courseId) : undefined,
+          url: uploadedUrl,
+          content: content || undefined,
+          isStudentUpload: true,
         };
 
         setPortalSources(v => [newItem, ...v]);
@@ -904,12 +1099,34 @@ export function TeacherPortal({
         return;
       }
       const title = uploadUrlTitle.trim() || cleanUrl;
+      let uploadedId = '';
+      try {
+        const formData = new FormData();
+        formData.append('title', title);
+        formData.append('courseId', courseCode);
+        if (courseId) formData.append('moodleCourseId', String(courseId));
+        formData.append('fileUrl', cleanUrl);
+        formData.append('uploadSource', 'teacher');
+        const procRes = await fetch('/api/documents/process', {
+          method: 'POST',
+          body: formData,
+        });
+        if (procRes.ok) {
+          const procData = await procRes.json();
+          uploadedId = procData?.material?.id ? String(procData.material.id) : '';
+        }
+      } catch (err) {
+        console.warn('Document URL indexing note:', err);
+      }
       const newItem: CourseSourceItem = {
+        id: uploadedId || `url-${Date.now()}`,
         name: title,
         type: 'LINK',
         sizeOrPages: 'Liên kết web',
         url: cleanUrl,
         courseCode,
+        courseId: courseId ? Number(courseId) : undefined,
+        isStudentUpload: true,
       };
       setPortalSources(v => [newItem, ...v]);
       setCheckedSources(v => [true, ...v]);
@@ -923,11 +1140,35 @@ export function TeacherPortal({
         return;
       }
       const title = uploadTextTitle.trim() || 'Ghi chú bài học mới';
+      const textNote = uploadTextContent.trim();
+      let uploadedId = '';
+      try {
+        const formData = new FormData();
+        formData.append('title', title);
+        formData.append('courseId', courseCode);
+        if (courseId) formData.append('moodleCourseId', String(courseId));
+        formData.append('content', textNote);
+        formData.append('uploadSource', 'teacher');
+        const procRes = await fetch('/api/documents/process', {
+          method: 'POST',
+          body: formData,
+        });
+        if (procRes.ok) {
+          const procData = await procRes.json();
+          uploadedId = procData?.material?.id ? String(procData.material.id) : '';
+        }
+      } catch (err) {
+        console.warn('Document text note indexing note:', err);
+      }
       const newItem: CourseSourceItem = {
+        id: uploadedId || `note-${Date.now()}`,
         name: title,
         type: 'TXT',
         sizeOrPages: 'Ghi chú cá nhân',
         courseCode,
+        courseId: courseId ? Number(courseId) : undefined,
+        content: textNote,
+        isStudentUpload: true,
       };
       setPortalSources(v => [newItem, ...v]);
       setCheckedSources(v => [true, ...v]);
@@ -995,12 +1236,22 @@ export function TeacherPortal({
   ];
   const activeStudents = students.length > 0 ? students : defaultStudents;
 
-  const activeGradeColumns = gradeColumns.filter(
-    col =>
-      col.itemtype !== 'course' &&
-      !col.name.toLowerCase().includes('course total') &&
-      !col.name.toLowerCase().includes('tổng kết')
-  );
+  const activeGradeColumns = gradeColumns.filter(col => {
+    const name = (col.name || '').toLowerCase();
+    const mod = (col.itemmodule || '').toLowerCase();
+    const type = (col.itemtype || '').toLowerCase();
+    return (
+      type !== 'course' &&
+      !name.includes('course total') &&
+      !name.includes('tổng kết') &&
+      mod !== 'attendance' &&
+      !mod.includes('attendance') &&
+      !name.includes('attendance') &&
+      type !== 'attendance' &&
+      !name.includes('điểm danh') &&
+      !name.includes('chuyên cần')
+    );
+  });
 
   const isAllColumnsSelected = selectedGradeColumnId === 'all';
   const displayedGradeColumns = isAllColumnsSelected
@@ -1166,8 +1417,25 @@ export function TeacherPortal({
           course: curCourse?.name || 'Khóa học',
           courseCode: curCourse?.code || '',
           courseId: curCourse?.id || selectedCourseId,
-          sources: selectedSources.map(s => ({ name: s.name, url: s.url, type: s.type })),
+          sources: selectedSources.map(s => ({
+            id: s.id,
+            name: s.name,
+            url: s.url,
+            type: s.type,
+            fileId: s.fileId,
+            moduleId: s.moduleId,
+            sectionId: s.sectionId,
+            sectionName: s.sectionName,
+            chapter: s.chapter,
+            isStudentUpload: s.isStudentUpload,
+            content: s.content,
+          })),
           sourceNames: selectedSources.map(s => s.name),
+          upcomingEvents: manualEvents.map(e => ({
+            title: e.title,
+            due: e.deliver_time ? new Date(e.deliver_time).toLocaleString('vi-VN') : '',
+            type: e.event_type || 'Sự kiện',
+          })),
           history: assistantChat.slice(1).map(c => ({ role: c.role, text: c.text })),
           model: assistantModel,
           allowExternalSource,
@@ -1701,7 +1969,18 @@ export function TeacherPortal({
     setQuizNotice(null);
     try {
       const selectedCourse = courses.find(c => String(c.id) === String(selectedCourseId));
-      const effectiveTopic = selectedCourse?.name || 'Ngân hàng câu hỏi trắc nghiệm';
+      let effectiveTopic = selectedCourse?.name || 'Ngân hàng câu hỏi trắc nghiệm';
+      if (quizDocumentText.trim()) {
+        const firstLine = quizDocumentText.trim().split('\n')[0].replace(/[\(\)]/g, '').trim();
+        if (firstLine.length >= 3) {
+          effectiveTopic = `${firstLine} - ${selectedCourse?.name || ''}`.trim();
+        }
+      }
+
+      const selectedSourcesList = visibleSources
+        .filter(({ i }) => checkedSources[i] ?? true)
+        .map(({ item }) => ({ name: item.name, url: item.url }));
+
       const res = await fetch('/api/teacher/quiz/generate', {
         method: 'POST',
         signal: controller.signal,
@@ -1711,6 +1990,8 @@ export function TeacherPortal({
           courseId: selectedCourseId,
           topic: effectiveTopic,
           documentText: quizDocumentText,
+          sources: selectedSourcesList,
+          allowExternalSource: quizAllowExternalSource,
           count: quizCount,
           difficulty: quizDifficulty,
           questionType: quizQuestionTypes.length === 1 ? quizQuestionTypes[0] : 'mixed',
@@ -1764,7 +2045,7 @@ export function TeacherPortal({
     URL.revokeObjectURL(url);
   };
 
-  const handleTabChange = (tab: 'assistant' | 'grades' | 'quiz') => {
+  const handleTabChange = (tab: 'assistant' | 'grades' | 'quiz' | 'notifications') => {
     setActiveTab(tab);
     onTabChange?.(tab);
   };
@@ -1836,9 +2117,10 @@ export function TeacherPortal({
               style={{
                 padding: '0.5rem 0.85rem',
                 borderRadius: '10px',
-                background: '#141220',
+                background: 'rgba(255, 255, 255, 0.05)',
+                backdropFilter: 'blur(12px)',
                 color: '#f3f2f8',
-                border: '1px solid rgba(124, 109, 242, 0.4)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
                 fontSize: '0.88rem',
                 fontWeight: 500,
                 cursor: 'pointer',
@@ -1912,6 +2194,16 @@ export function TeacherPortal({
         >
           <HelpCircle size={14} />
           <span>Tạo Đề Moodle XML</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleTabChange('notifications')}
+          className={`teacher-tab-btn ${activeTab === 'notifications' ? 'active' : ''}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+        >
+          <Megaphone size={14} />
+          <span>Thông Báo Lớp Học</span>
         </button>
       </div>
 
@@ -2036,17 +2328,26 @@ export function TeacherPortal({
                   { id: 'Mindmap', label: 'Mindmap', icon: <GitFork size={14} /> },
                   { id: 'Flashcard', label: 'Flashcard', icon: <Layers size={14} /> },
                   { id: 'Slide', label: 'Slide', icon: <Layout size={14} /> },
-                ].map(tab => (
-                  <button
-                    key={tab.id}
-                    className={tool === tab.id ? 'selected' : ''}
-                    onClick={() => openTool(tab.id)}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                  >
-                    {tab.icon}
-                    <span>{tab.label}</span>
-                  </button>
-                ))}
+                ].map(tab => {
+                  const hasArtifact = !!artifactsMap[tab.id];
+                  return (
+                    <button
+                      key={tab.id}
+                      className={tool === tab.id ? 'selected' : ''}
+                      onClick={() => openTool(tab.id)}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                      title={hasArtifact ? `${tab.label} (Đã tạo học liệu)` : tab.label}
+                    >
+                      {tab.icon}
+                      <span>{tab.label}</span>
+                      {hasArtifact && (
+                        <span className="tab-artifact-count-badge">
+                          1
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
 
               <div className="tool-tabs-actions">
@@ -2336,9 +2637,10 @@ export function TeacherPortal({
                   style={{
                     padding: '0.45rem 0.8rem',
                     borderRadius: '8px',
-                    background: '#141220',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    backdropFilter: 'blur(12px)',
                     color: '#f3f2f8',
-                    border: '1px solid rgba(124, 109, 242, 0.4)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
                     fontSize: '0.85rem',
                     fontWeight: 600,
                     outline: 'none',
@@ -3535,7 +3837,7 @@ export function TeacherPortal({
             {/* 3. Độ Khó (Own Full Line) */}
             <div>
               <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.45rem' }}>
-                3. ĐỘ KHÓ (DIFFICULTY):
+                3. ĐỘ KHÓ:
               </label>
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                 {[
@@ -3569,16 +3871,16 @@ export function TeacherPortal({
               </div>
             </div>
 
-            {/* Document Text / Notes (Expanded Textarea) */}
+            {/* Section 4: Focus Topic */}
             <div>
               <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.45rem' }}>
-                4. TÀI LIỆU NGUỒN / GHI CHÚ BÀI GIẢNG (TÙY CHỌN):
+                4. CHỦ ĐỀ / PHẠM VI TRỌNG TÂM (TÙY CHỌN)
               </label>
-              <textarea
-                rows={4}
+              <input
+                type="text"
                 value={quizDocumentText}
                 onChange={e => setQuizDocumentText(e.target.value)}
-                placeholder="Dán nội dung bài giảng, tóm tắt lý thuyết môn học hoặc để trống để AI tự trích xuất..."
+                placeholder={`Để trống để ra đề toàn bộ môn ${courses.find(c => String(c.id) === String(selectedCourseId))?.name || 'môn học'}, hoặc nhập chuyên đề...`}
                 style={{
                   width: '100%',
                   padding: '0.75rem 0.85rem',
@@ -3586,13 +3888,63 @@ export function TeacherPortal({
                   background: '#141220',
                   color: '#f3f2f8',
                   border: '1px solid #26233a',
-                  fontSize: '16px',
-                  lineHeight: 1.5,
-                  minHeight: '100px',
-                  resize: 'vertical',
+                  fontSize: '15px',
                   outline: 'none',
                 }}
               />
+            </div>
+
+            {/* Section 5: External Knowledge Option */}
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.45rem' }}>
+                5. PHẠM VI NỘI DUNG RA ĐỀ
+              </label>
+              <button
+                type="button"
+                className={`level-card ${quizAllowExternalSource ? 'active' : ''}`}
+                onClick={() => setQuizAllowExternalSource(prev => !prev)}
+                style={{
+                  width: '100%',
+                  padding: isMobile ? '0.75rem' : '0.85rem 1rem',
+                  borderRadius: '12px',
+                  border: quizAllowExternalSource ? '1.5px solid #38bdf8' : '1px solid #26233a',
+                  background: quizAllowExternalSource ? 'rgba(56, 189, 248, 0.12)' : '#141220',
+                  color: quizAllowExternalSource ? '#f3f2f8' : '#9894ad',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  boxShadow: quizAllowExternalSource ? '0 0 16px rgba(56, 189, 248, 0.25)' : 'none',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.3rem',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                  <strong style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: isMobile ? '0.88rem' : '0.94rem', color: quizAllowExternalSource ? '#fff' : '#c4c1d6' }}>
+                    {quizAllowExternalSource ? <Globe size={15} style={{ color: '#38bdf8' }} /> : <Lock size={15} style={{ color: '#94a3b8' }} />}
+                    <span>{quizAllowExternalSource ? 'Cho phép câu hỏi liên hệ thực tiễn ngoài giáo trình' : 'Bám sát nghiêm ngặt tài liệu được cung cấp'}</span>
+                  </strong>
+                  <span
+                    className="level-badge"
+                    style={{
+                      background: quizAllowExternalSource ? 'rgba(56, 189, 248, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+                      color: quizAllowExternalSource ? '#38bdf8' : '#94a3b8',
+                      border: quizAllowExternalSource ? '1px solid rgba(56, 189, 248, 0.35)' : '1px solid #26233a',
+                      padding: '2px 8px',
+                      borderRadius: '6px',
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                    }}
+                  >
+                    {quizAllowExternalSource ? 'BẬT' : 'TẮT'}
+                  </span>
+                </div>
+                <small style={{ fontSize: isMobile ? '0.74rem' : '0.78rem', color: quizAllowExternalSource ? '#7dd3fc' : '#6b6684', lineHeight: 1.35 }}>
+                  {quizAllowExternalSource
+                    ? 'Đề thi tích hợp các câu hỏi tình huống thực tế trong ngành, ứng dụng hiện đại và câu hỏi tư duy mở rộng.'
+                    : 'Đề thi tập trung hoàn toàn vào nội dung văn bản tài liệu môn học đã chọn.'}
+                </small>
+              </button>
             </div>
 
             {/* Footer with Big Vibrant Action Button */}
@@ -4395,67 +4747,52 @@ export function TeacherPortal({
       {/* MODAL 2: XML Preview Modal                                           */}
       {/* ==================================================================== */}
       {showXmlModal && (
-        <div
-          className="teacher-modal-backdrop"
-          onClick={() => setShowXmlModal(false)}
+        <TeacherModal
+          title="Xem trước định dạng Moodle XML"
+          onClose={() => setShowXmlModal(false)}
+          width="min(820px, 94vw)"
         >
-          <div
-            className="teacher-modal-panel"
-            style={{ width: 'min(100%, 750px)', padding: isMobile ? '1rem' : '1.5rem', maxHeight: '85vh' }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <h3 style={{ margin: 0, fontSize: '1.05rem', color: '#f3f2f8' }}>
-                Xem trước định dạng Moodle XML
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowXmlModal(false)}
-                style={{ background: 'transparent', border: 'none', color: '#9894ad', fontSize: '1.2rem', cursor: 'pointer' }}
-              >
-                ✕
-              </button>
-            </div>
-
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
             <pre
               style={{
-                maxHeight: '400px',
+                maxHeight: '52vh',
                 overflow: 'auto',
-                padding: '0.85rem',
-                borderRadius: '8px',
-                background: '#141220',
+                padding: '1rem',
+                borderRadius: '10px',
+                background: '#0e0d17',
                 color: '#a594fd',
-                fontSize: '0.8rem',
+                fontSize: '0.82rem',
                 fontFamily: 'monospace',
                 border: '1px solid #26233a',
                 whiteSpace: 'pre-wrap',
-                margin: '0 0 1rem',
-                flex: 1,
+                margin: 0,
+                lineHeight: 1.5,
               }}
             >
               {xmlContent || convertQuestionsToMoodleXml(generatedQuestions, courses.find(c => String(c.id) === String(selectedCourseId))?.name || 'Ngân hàng câu hỏi')}
             </pre>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', flexWrap: 'wrap', paddingTop: '0.65rem', borderTop: '1px solid #26233a' }}>
               <button
                 type="button"
                 onClick={() => {
                   const currentCourseName = courses.find(c => String(c.id) === String(selectedCourseId))?.name || 'Ngân hàng câu hỏi';
                   navigator.clipboard.writeText(xmlContent || convertQuestionsToMoodleXml(generatedQuestions, currentCourseName));
-                  alert('Đã sao chép mã XML vào bộ nhớ đệm!');
+                  notify('Đã sao chép mã XML vào bộ nhớ đệm!');
                 }}
                 style={{
-                  padding: '0.5rem 1rem',
+                  padding: '0.55rem 1.1rem',
                   borderRadius: '8px',
                   background: 'rgba(255, 255, 255, 0.08)',
                   border: '1px solid #26233a',
                   color: '#f3f2f8',
                   cursor: 'pointer',
-                  flex: isMobile ? 1 : 'initial',
-                  minHeight: '42px',
+                  minHeight: '40px',
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '5px',
+                  gap: '6px',
+                  fontWeight: 500,
+                  fontSize: '0.85rem',
                 }}
               >
                 <Copy size={14} />
@@ -4465,18 +4802,19 @@ export function TeacherPortal({
                 type="button"
                 onClick={downloadMoodleXml}
                 style={{
-                  padding: '0.5rem 1.25rem',
+                  padding: '0.55rem 1.25rem',
                   borderRadius: '8px',
                   border: 'none',
                   background: '#20bfa9',
-                  color: '#fff',
-                  fontWeight: 600,
+                  color: '#0a231f',
+                  fontWeight: 700,
+                  fontSize: '0.85rem',
                   cursor: 'pointer',
-                  flex: isMobile ? 1 : 'initial',
-                  minHeight: '42px',
+                  minHeight: '40px',
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '5px',
+                  gap: '6px',
+                  boxShadow: '0 4px 14px rgba(32, 191, 169, 0.3)',
                 }}
               >
                 <Download size={14} />
@@ -4484,130 +4822,616 @@ export function TeacherPortal({
               </button>
             </div>
           </div>
-        </div>
+        </TeacherModal>
       )}
 
       {/* ==================================================================== */}
       {/* MODAL 3: Moodle Import Guide Modal                                   */}
       {/* ==================================================================== */}
       {showGuideModal && (
-        <div
-          className="teacher-modal-backdrop"
-          onClick={() => setShowGuideModal(false)}
+        <TeacherModal
+          title="Hướng dẫn 3 bước nạp tệp XML vào Moodle"
+          onClose={() => setShowGuideModal(false)}
+          width="min(650px, 94vw)"
         >
-          <div
-            className="teacher-modal-panel"
-            style={{ width: 'min(100%, 650px)', padding: isMobile ? '1.15rem' : '1.75rem', maxHeight: '88vh', overflowY: 'auto' }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#f3f2f8' }}>
-                Hướng dẫn 3 bước nhập tệp XML vào Moodle
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowGuideModal(false)}
-                style={{ background: 'transparent', border: 'none', color: '#9894ad', fontSize: '1.2rem', cursor: 'pointer' }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', margin: '0.5rem 0 1.25rem' }}>
-              <div style={{ display: 'flex', gap: '0.75rem' }}>
-                <span
-                  style={{
-                    width: '28px',
-                    height: '28px',
-                    borderRadius: '50%',
-                    background: '#7c6df2',
-                    color: '#fff',
-                    display: 'grid',
-                    placeItems: 'center',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    flexShrink: 0,
-                  }}
-                >
-                  1
-                </span>
-                <div>
-                  <strong style={{ color: '#f3f2f8' }}>Mở Question Bank trong Moodle</strong>
-                  <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: '#9894ad' }}>
-                    Vào trang môn học trên Moodle &rarr; Tab <strong>More</strong> &rarr; Chọn <strong>Question bank</strong> (Ngân hàng câu hỏi).
-                  </p>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: '0.75rem' }}>
-                <span
-                  style={{
-                    width: '28px',
-                    height: '28px',
-                    borderRadius: '50%',
-                    background: '#7c6df2',
-                    color: '#fff',
-                    display: 'grid',
-                    placeItems: 'center',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    flexShrink: 0,
-                  }}
-                >
-                  2
-                </span>
-                <div>
-                  <strong style={{ color: '#f3f2f8' }}>Chọn định dạng Moodle XML format</strong>
-                  <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: '#9894ad' }}>
-                    Chọn tab <strong>Import</strong> (Nhập) &rarr; Tích chọn <strong>Moodle XML format</strong>.
-                  </p>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: '0.75rem' }}>
-                <span
-                  style={{
-                    width: '28px',
-                    height: '28px',
-                    borderRadius: '50%',
-                    background: '#7c6df2',
-                    color: '#fff',
-                    display: 'grid',
-                    placeItems: 'center',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    flexShrink: 0,
-                  }}
-                >
-                  3
-                </span>
-                <div>
-                  <strong style={{ color: '#f3f2f8' }}>Kéo thả file quiz.xml và bấm Import</strong>
-                  <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: '#9894ad' }}>
-                    Thả file <code>quiz.xml</code> vào ô upload &rarr; Nhấn <strong>Import</strong>.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={() => setShowGuideModal(false)}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', margin: '0.25rem 0 1.25rem' }}>
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <span
                 style={{
-                  padding: '0.55rem 1.4rem',
-                  borderRadius: '8px',
-                  border: 'none',
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '50%',
                   background: '#7c6df2',
                   color: '#fff',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  width: isMobile ? '100%' : 'auto',
-                  minHeight: '42px',
+                  display: 'grid',
+                  placeItems: 'center',
+                  fontWeight: 700,
+                  fontSize: '0.85rem',
+                  flexShrink: 0,
                 }}
               >
-                Đã hiểu
-              </button>
+                1
+              </span>
+              <div>
+                <strong style={{ color: '#f3f2f8' }}>Mở Question Bank trong Moodle</strong>
+                <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: '#9894ad' }}>
+                  Vào trang môn học trên Moodle &rarr; Tab <strong>More</strong> &rarr; Chọn <strong>Question bank</strong> (Ngân hàng câu hỏi).
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <span
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '50%',
+                  background: '#7c6df2',
+                  color: '#fff',
+                  display: 'grid',
+                  placeItems: 'center',
+                  fontWeight: 700,
+                  fontSize: '0.85rem',
+                  flexShrink: 0,
+                }}
+              >
+                2
+              </span>
+              <div>
+                <strong style={{ color: '#f3f2f8' }}>Chọn định dạng Moodle XML format</strong>
+                <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: '#9894ad' }}>
+                  Chọn tab <strong>Import</strong> (Nhập) &rarr; Tích chọn <strong>Moodle XML format</strong>.
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <span
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '50%',
+                  background: '#7c6df2',
+                  color: '#fff',
+                  display: 'grid',
+                  placeItems: 'center',
+                  fontWeight: 700,
+                  fontSize: '0.85rem',
+                  flexShrink: 0,
+                }}
+              >
+                3
+              </span>
+              <div>
+                <strong style={{ color: '#f3f2f8' }}>Kéo thả file quiz.xml và bấm Import</strong>
+                <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: '#9894ad' }}>
+                  Thả file <code>quiz.xml</code> vào ô upload &rarr; Nhấn <strong>Import</strong>.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '0.5rem', borderTop: '1px solid #26233a' }}>
+            <button
+              type="button"
+              onClick={() => setShowGuideModal(false)}
+              style={{
+                padding: '0.55rem 1.4rem',
+                borderRadius: '8px',
+                border: 'none',
+                background: '#7c6df2',
+                color: '#fff',
+                fontWeight: 600,
+                cursor: 'pointer',
+                width: isMobile ? '100%' : 'auto',
+                minHeight: '40px',
+              }}
+            >
+              Đã hiểu
+            </button>
+          </div>
+        </TeacherModal>
+      )}
+
+      {/* ==================================================================== */}
+      {/* TAB 4: MANUAL ANNOUNCEMENTS & NOTIFICATIONS                          */}
+      {/* ==================================================================== */}
+      {activeTab === 'notifications' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: isMobile ? '1rem 0' : '1.25rem 0' }}>
+          {/* Header Banner */}
+          <div
+            style={{
+              background: 'linear-gradient(135deg, rgba(236, 72, 153, 0.12), rgba(124, 109, 242, 0.08))',
+              border: '1px solid rgba(236, 72, 153, 0.25)',
+              borderRadius: '16px',
+              padding: '1.25rem 1.5rem',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '1rem',
+            }}
+          >
+            <div
+              style={{
+                width: '42px',
+                height: '42px',
+                borderRadius: '12px',
+                background: 'linear-gradient(135deg, #ec4899, #be185d)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
+                flexShrink: 0,
+                boxShadow: '0 6px 16px rgba(236, 72, 153, 0.3)',
+              }}
+            >
+              <Megaphone size={22} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <h2 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 700, color: '#f3f2f8' }}>
+                Thông Báo & Dặn Dò Thủ Công Cho Lớp Học
+              </h2>
+              <p style={{ margin: '0.25rem 0 0', fontSize: '0.86rem', color: '#9894ad', lineHeight: 1.4 }}>
+                Chủ động phát thông báo ngoài LMS với các mốc hẹn giờ tùy chọn và nội dung dặn dò chi tiết.
+              </p>
+            </div>
+          </div>
+
+          {/* Main Grid: Form Left, List Right */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : '1.2fr 1fr',
+              gap: '1.25rem',
+              alignItems: 'start',
+            }}
+          >
+            {/* Form Section */}
+            <div
+              style={{
+                background: '#161426',
+                border: '1px solid #26233a',
+                borderRadius: '16px',
+                padding: '1.5rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '1.2rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid rgba(255, 255, 255, 0.06)', paddingBottom: '0.85rem' }}>
+                <Send size={18} style={{ color: '#ec4899' }} />
+                <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: '#f3f2f8' }}>
+                  Tạo Thông Báo Mới
+                </h3>
+              </div>
+
+              <form onSubmit={handleCreateManualNotification} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+                {/* Title */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                    Tiêu đề thông báo: <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={notifTitle}
+                    onChange={e => setNotifTitle(e.target.value)}
+                    placeholder="Tiêu đề thông báo"
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '0.65rem 0.85rem',
+                      borderRadius: '8px',
+                      background: '#141220',
+                      color: '#f3f2f8',
+                      border: '1px solid #26233a',
+                      fontSize: '0.9rem',
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+
+                {/* Deliver Time Picker */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                    Thời điểm diễn ra sự kiện: <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                    <Calendar size={16} style={{ position: 'absolute', left: '12px', color: '#9894ad', pointerEvents: 'none' }} />
+                    <input
+                      type="datetime-local"
+                      value={notifDeliverTime}
+                      onChange={e => setNotifDeliverTime(e.target.value)}
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '0.65rem 0.85rem 0.65rem 36px',
+                        borderRadius: '8px',
+                        background: '#141220',
+                        color: '#f3f2f8',
+                        border: '1px solid #26233a',
+                        fontSize: '0.9rem',
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                        colorScheme: 'dark',
+                      }}
+                    />
+                  </div>
+                  <small style={{ display: 'block', marginTop: '4px', fontSize: '0.75rem', color: '#9894ad' }}>
+                    Hệ thống sẽ dựa vào thời điểm này để đếm lùi và kích hoạt các mốc nhắc nhở đã chọn.
+                  </small>
+                </div>
+
+                {/* Reminders Selection */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                    Mốc thông báo nhắc nhở: <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  
+                  {/* Preset Checkbox Chips */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '0.6rem' }}>
+                    {[
+                      { mins: 0, label: 'Ngay lúc diễn ra (0p)' },
+                      { mins: 15, label: 'Trước 15 phút' },
+                      { mins: 30, label: 'Trước 30 phút' },
+                      { mins: 60, label: 'Trước 1 tiếng' },
+                      { mins: 1440, label: 'Trước 1 ngày' },
+                    ].map(preset => {
+                      const isChecked = selectedReminders.includes(preset.mins);
+                      return (
+                        <button
+                          key={preset.mins}
+                          type="button"
+                          onClick={() => handleToggleReminder(preset.mins)}
+                          style={{
+                            padding: '0.35rem 0.75rem',
+                            borderRadius: '20px',
+                            border: isChecked ? '1px solid #ec4899' : '1px solid #26233a',
+                            background: isChecked ? 'rgba(236, 72, 153, 0.2)' : '#141220',
+                            color: isChecked ? '#f472b6' : '#9894ad',
+                            fontSize: '0.78rem',
+                            fontWeight: isChecked ? 600 : 400,
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                          }}
+                        >
+                          {isChecked ? '✓ ' : '+ '}
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Add Custom Time Input with Unit Dropdown */}
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <input
+                      type="number"
+                      min="1"
+                      value={customReminderInput}
+                      onChange={e => setCustomReminderInput(e.target.value)}
+                      placeholder="Nhập số (VD: 2, 45...)"
+                      style={{
+                        flex: 1.2,
+                        minWidth: '100px',
+                        padding: '0.55rem 0.75rem',
+                        borderRadius: '8px',
+                        background: '#141220',
+                        color: '#f3f2f8',
+                        border: '1px solid #26233a',
+                        fontSize: '0.85rem',
+                        outline: 'none',
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddCustomReminder();
+                        }
+                      }}
+                    />
+                    <select
+                      value={customReminderUnit}
+                      onChange={e => setCustomReminderUnit(e.target.value as 'minutes' | 'hours' | 'days')}
+                      style={{
+                        padding: '0.55rem 0.75rem',
+                        borderRadius: '8px',
+                        background: '#141220',
+                        color: '#f3f2f8',
+                        border: '1px solid #26233a',
+                        fontSize: '0.85rem',
+                        outline: 'none',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <option value="minutes">Phút</option>
+                      <option value="hours">Giờ (tiếng)</option>
+                      <option value="days">Ngày</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={handleAddCustomReminder}
+                      style={{
+                        padding: '0.55rem 1rem',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: '#26233a',
+                        color: '#f3f2f8',
+                        fontSize: '0.82rem',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      + Thêm mốc
+                    </button>
+                  </div>
+
+                  {/* Selected Reminders Badges */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '0.5rem', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#9894ad' }}>Mốc đã chọn:</span>
+                    {selectedReminders.length === 0 ? (
+                      <span style={{ fontSize: '0.75rem', color: '#ef4444' }}>Chưa chọn mốc nào</span>
+                    ) : (
+                      selectedReminders.map(m => {
+                        let label = `${m}p`;
+                        if (m === 0) label = '0p (ngay giờ)';
+                        else if (m % 1440 === 0) label = `${m / 1440} ngày (${m}p)`;
+                        else if (m % 60 === 0) label = `${m / 60}h (${m}p)`;
+
+                        return (
+                          <span
+                            key={m}
+                            style={{
+                              padding: '2px 8px',
+                              borderRadius: '12px',
+                              background: 'rgba(236, 72, 153, 0.25)',
+                              color: '#f472b6',
+                              fontSize: '0.75rem',
+                              fontWeight: 600,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                            }}
+                          >
+                            {label}
+                            <button
+                              type="button"
+                              onClick={() => handleToggleReminder(m)}
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                color: '#f472b6',
+                                cursor: 'pointer',
+                                padding: 0,
+                                lineHeight: 1,
+                                fontSize: '12px',
+                              }}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* Event Details (Custom Message Body) */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#cfc8ff', marginBottom: '0.4rem' }}>
+                    Nội dung thông báo chi tiết:
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={notifDetails}
+                    onChange={e => setNotifDetails(e.target.value)}
+                    placeholder="Nhập nội dung dặn dò chi tiết gửi tới sinh viên..."
+                    style={{
+                      width: '100%',
+                      padding: '0.65rem 0.85rem',
+                      borderRadius: '8px',
+                      background: '#141220',
+                      color: '#f3f2f8',
+                      border: '1px solid #26233a',
+                      fontSize: '0.9rem',
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                      resize: 'vertical',
+                      fontFamily: 'inherit',
+                    }}
+                  />
+                  <small style={{ display: 'block', marginTop: '4px', fontSize: '0.75rem', color: '#9894ad' }}>
+                    💡 Nội dung này sẽ được thay thế cho câu văn mẫu mặc định khi bắn thông báo đẩy FCM tới thiết bị của sinh viên.
+                  </small>
+                </div>
+
+                {/* Submit Button */}
+                <button
+                  type="submit"
+                  disabled={createNotifLoading}
+                  style={{
+                    marginTop: '0.5rem',
+                    padding: '0.75rem 1.5rem',
+                    borderRadius: '10px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #ec4899, #db2777)',
+                    color: '#ffffff',
+                    fontWeight: 700,
+                    fontSize: '0.92rem',
+                    cursor: createNotifLoading ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 4px 14px rgba(236, 72, 153, 0.4)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    opacity: createNotifLoading ? 0.7 : 1,
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  {createNotifLoading ? (
+                    <>
+                      <RotateCcw size={16} className="animate-spin" />
+                      <span>Đang lên lịch thông báo...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Megaphone size={16} />
+                      <span>Phát Thông Báo Cho Lớp</span>
+                    </>
+                  )}
+                </button>
+              </form>
+            </div>
+
+            {/* List Section: Active Announcements for this course */}
+            <div
+              style={{
+                background: '#161426',
+                border: '1px solid #26233a',
+                borderRadius: '16px',
+                padding: '1.5rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '1rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255, 255, 255, 0.06)', paddingBottom: '0.85rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Bell size={18} style={{ color: '#a5b4fc' }} />
+                  <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: '#f3f2f8' }}>
+                    Thông Báo Đang Hoạt Động ({manualEvents.length})
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void fetchTeacherManualEvents()}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#9894ad',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '4px',
+                    borderRadius: '4px',
+                  }}
+                  title="Tải lại danh sách"
+                >
+                  <RotateCcw size={15} className={manualEventsLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+
+              {manualEventsLoading && manualEvents.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '2rem 1rem', color: '#9894ad', fontSize: '0.88rem' }}>
+                  <RotateCcw size={20} className="animate-spin" style={{ margin: '0 auto 8px' }} />
+                  <p style={{ margin: 0 }}>Đang tải danh sách thông báo...</p>
+                </div>
+              ) : manualEvents.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '2.5rem 1rem', color: '#9894ad' }}>
+                  <div
+                    style={{
+                      width: '48px',
+                      height: '48px',
+                      borderRadius: '50%',
+                      background: 'rgba(255, 255, 255, 0.04)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      margin: '0 auto 12px',
+                      color: '#9894ad',
+                    }}
+                  >
+                    <Megaphone size={20} />
+                  </div>
+                  <p style={{ margin: 0, fontWeight: 600, color: '#cbd5e1' }}>Chưa có thông báo thủ công nào</p>
+                  <small style={{ display: 'block', marginTop: '4px', fontSize: '0.8rem' }}>
+                    Sử dụng form bên cạnh để tạo thông báo nhắc nhở đầu tiên cho khóa học này.
+                  </small>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', maxHeight: '560px', overflowY: 'auto' }}>
+                  {manualEvents.map(item => {
+                    const dTime = new Date(item.deliverTime);
+                    const isPast = dTime.getTime() < Date.now();
+                    return (
+                      <div
+                        key={item.id}
+                        style={{
+                          background: '#141220',
+                          border: '1px solid #26233a',
+                          borderRadius: '12px',
+                          padding: '1rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.5rem',
+                          position: 'relative',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
+                          <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600, color: '#f3f2f8', lineHeight: 1.3 }}>
+                            {item.title}
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteManualNotification(item.id)}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#ef4444',
+                              cursor: 'pointer',
+                              padding: '4px',
+                              borderRadius: '4px',
+                              flexShrink: 0,
+                            }}
+                            title="Hủy / Xóa thông báo"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+
+                        {item.eventDetails && (
+                          <p style={{ margin: 0, fontSize: '0.82rem', color: '#cbd5e1', lineHeight: 1.4, whiteSpace: 'pre-line' }}>
+                            {item.eventDetails}
+                          </p>
+                        )}
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: isPast ? '#ef4444' : '#a5b4fc', marginTop: '2px' }}>
+                          <Clock size={13} />
+                          <span>
+                            {dTime.toLocaleString('vi-VN', {
+                              weekday: 'short',
+                              day: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                        </div>
+
+                        {item.sentReminders && item.sentReminders.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.72rem', color: '#9894ad' }}>Mốc còn lại:</span>
+                            {item.sentReminders.map(r => (
+                              <span
+                                key={r}
+                                style={{
+                                  padding: '1px 6px',
+                                  borderRadius: '8px',
+                                  background: 'rgba(236, 72, 153, 0.15)',
+                                  color: '#f472b6',
+                                  fontSize: '0.7rem',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {r === 0 ? '0p (ngay giờ)' : `${r}p`}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>

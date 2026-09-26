@@ -10,7 +10,8 @@
     "build": "vinext build",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "cron": "node scripts/cron-worker.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",
@@ -25,6 +26,7 @@
     "html-to-image": "^1.11.13",
     "katex": "^0.18.4",
     "lucide-react": "^1.39.0",
+    "mysql2": "^3.24.4",
     "next": "16.2.6",
     "openai": "^7.8.0",
     "postgres": "^3.4.9",

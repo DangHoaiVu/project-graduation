@@ -20,6 +20,7 @@ import {
   Layout,
   Layers,
   FileText,
+  Palette,
 } from 'lucide-react';
 import {
   SlideDeckData,
@@ -38,7 +39,90 @@ interface SlidePresentationProps {
   notify: (msg: string) => void;
 }
 
-type SlideTheme = 'indigo' | 'slate' | 'ocean' | 'minimal';
+type SlideTheme = 'indigo' | 'slate' | 'ocean' | 'minimal' | 'custom';
+
+/**
+ * Renders inline markdown text with support for:
+ * - **bold / semibold text** -> rendered with font-weight: 600 (semibold)
+ * - *italic* -> rendered in italics
+ * - `code` -> rendered with code badge
+ */
+function renderMarkdownSemibold(text?: string | null): React.ReactNode {
+  if (!text) return null;
+
+  // Split by markdown bold/italic (***...***), bold (**...**), inline code (`...`), or italic (*...*)
+  const tokenRegex = /(\*\*\*[^*]+?\*\*\*|\*\*[^*]+?\*\*|`[^`]+?`|\*[^*]+?\*)/g;
+  const parts = text.split(tokenRegex);
+
+  return parts.map((part, i) => {
+    if (part.startsWith('***') && part.endsWith('***') && part.length >= 6) {
+      return (
+        <strong
+          key={i}
+          className="slide-semibold"
+          style={{ fontWeight: 600, fontStyle: 'italic', color: '#ffffff' }}
+        >
+          {part.slice(3, -3)}
+        </strong>
+      );
+    }
+    if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+      return (
+        <strong
+          key={i}
+          className="slide-semibold"
+          style={{ fontWeight: 600, color: '#ffffff' }}
+        >
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+      return (
+        <code
+          key={i}
+          style={{
+            background: 'rgba(255, 255, 255, 0.1)',
+            padding: '1px 5px',
+            borderRadius: '4px',
+            fontSize: '0.9em',
+            fontFamily: 'monospace',
+          }}
+        >
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    if (part.startsWith('*') && part.endsWith('*') && part.length >= 2 && !part.startsWith('**')) {
+      return (
+        <em key={i} style={{ fontStyle: 'italic' }}>
+          {part.slice(1, -1)}
+        </em>
+      );
+    }
+    return part;
+  });
+}
+
+function stripMarkdown(text?: string | null): string {
+  if (!text) return '';
+  return text
+    .replace(/\*\*\*([^*]+?)\*\*\*/g, '$1')
+    .replace(/\*\*([^*]+?)\*\*/g, '$1')
+    .replace(/\*([^*]+?)\*/g, '$1')
+    .replace(/`([^`]+?)`/g, '$1')
+    .trim();
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function hexToAlpha(hex: string, alpha: number): string {
+  const [r, g, b] = hexToRgb(hex);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 export function SlidePresentation({
   initialDeck,
@@ -72,7 +156,12 @@ export function SlidePresentation({
   const [showNotes, setShowNotes] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [theme, setTheme] = useState<SlideTheme>('indigo');
+  const [customAccent, setCustomAccent] = useState('#e879f9');
   const [isEditing, setIsEditing] = useState(false);
+
+  // Editable topic state
+  const [isEditingTopic, setIsEditingTopic] = useState(false);
+  const [editTopicValue, setEditTopicValue] = useState('');
 
   // Edit draft states
   const [editTitle, setEditTitle] = useState('');
@@ -82,6 +171,7 @@ export function SlidePresentation({
   const [editNotes, setEditNotes] = useState('');
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const colorInputRef = useRef<HTMLInputElement>(null);
   const slides = deck.slides || [];
   const currentSlide = slides[currentIdx] || slides[0];
 
@@ -171,7 +261,7 @@ export function SlidePresentation({
   const handleSaveEdit = () => {
     const updatedBullets = editBulletsText
       .split('\n')
-      .map(s => s.replace(/^[•\-\*]\s*/, '').trim())
+      .map(s => s.replace(/^(?:[•\-]\s*|\*(?!\*)\s*)/, '').trim())
       .filter(Boolean);
 
     const updatedSlides = [...slides];
@@ -216,44 +306,54 @@ export function SlidePresentation({
   };
 
   // Theme styling definitions
-  const themeStyles = {
+  const themeMap: Record<Exclude<SlideTheme, 'custom'>, any> = {
     indigo: {
-      bg: 'linear-gradient(135deg, #0b0f19 0%, #1e1b4b 60%, #0f172a 100%)',
-      accent: '#7c6df2',
-      accentBg: 'rgba(124, 109, 242, 0.15)',
+      bg: 'linear-gradient(135deg, rgba(25, 20, 42, 0.7) 0%, rgba(46, 28, 76, 0.6) 60%, rgba(18, 14, 28, 0.75) 100%)',
+      accent: '#f868c4',
+      accentBg: 'rgba(248, 104, 196, 0.15)',
       titleColor: '#ffffff',
       textColor: '#e2e8f0',
-      takeawayBg: 'rgba(124, 109, 242, 0.18)',
-      border: '1px solid rgba(124, 109, 242, 0.35)',
+      takeawayBg: 'rgba(142, 123, 227, 0.18)',
+      border: '1px solid rgba(255, 255, 255, 0.12)',
     },
     slate: {
-      bg: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
+      bg: 'linear-gradient(135deg, rgba(15, 23, 42, 0.72) 0%, rgba(30, 41, 59, 0.62) 100%)',
       accent: '#38bdf8',
       accentBg: 'rgba(56, 189, 248, 0.15)',
       titleColor: '#f8fafc',
       textColor: '#cbd5e1',
       takeawayBg: 'rgba(56, 189, 248, 0.15)',
-      border: '1px solid rgba(56, 189, 248, 0.3)',
+      border: '1px solid rgba(255, 255, 255, 0.12)',
     },
     ocean: {
-      bg: 'linear-gradient(135deg, #042f2e 0%, #0c4a6e 100%)',
+      bg: 'linear-gradient(135deg, rgba(4, 47, 46, 0.72) 0%, rgba(12, 74, 110, 0.62) 100%)',
       accent: '#2dd4bf',
       accentBg: 'rgba(45, 212, 191, 0.15)',
       titleColor: '#f0fdfa',
       textColor: '#ccfbf1',
       takeawayBg: 'rgba(45, 212, 191, 0.18)',
-      border: '1px solid rgba(45, 212, 191, 0.35)',
+      border: '1px solid rgba(255, 255, 255, 0.12)',
     },
     minimal: {
-      bg: 'linear-gradient(135deg, #18181b 0%, #27272a 100%)',
+      bg: 'linear-gradient(135deg, rgba(24, 24, 27, 0.72) 0%, rgba(39, 39, 42, 0.62) 100%)',
       accent: '#fbbf24',
       accentBg: 'rgba(251, 191, 36, 0.15)',
       titleColor: '#ffffff',
       textColor: '#d4d4d8',
       takeawayBg: 'rgba(251, 191, 36, 0.15)',
-      border: '1px solid rgba(251, 191, 36, 0.3)',
+      border: '1px solid rgba(255, 255, 255, 0.12)',
     },
-  }[theme];
+  };
+
+  const themeStyles = theme === 'custom' ? {
+    bg: `linear-gradient(135deg, rgba(20, 18, 30, 0.72) 0%, ${hexToAlpha(customAccent, 0.15)} 100%)`,
+    accent: customAccent,
+    accentBg: hexToAlpha(customAccent, 0.15),
+    titleColor: '#ffffff',
+    textColor: '#e2e8f0',
+    takeawayBg: hexToAlpha(customAccent, 0.18),
+    border: '1px solid rgba(255, 255, 255, 0.12)',
+  } : themeMap[theme];
 
   return (
     <div
@@ -297,7 +397,7 @@ export function SlidePresentation({
             >
               {slides.length} trang slide
             </span>
-            <small style={{ color: '#94a3b8' }}>Chủ đề: {topic || courseTitle}</small>
+            <small style={{ color: '#94a3b8' }}>Chủ đề: {deck.topic || topic || courseTitle}</small>
           </div>
         </div>
 
@@ -389,9 +489,11 @@ export function SlidePresentation({
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
-          boxShadow: '0 12px 40px rgba(0, 0, 0, 0.5)',
+          boxShadow: '0 20px 50px -10px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.08)',
           overflow: 'hidden',
           transition: 'all 0.3s ease',
+          backdropFilter: 'blur(24px)',
+          WebkitBackdropFilter: 'blur(24px)',
         }}
       >
         {/* Top Accent Stripe */}
@@ -462,6 +564,37 @@ export function SlidePresentation({
                   title={`Giao diện: ${t}`}
                 />
               ))}
+              <span style={{ color: 'rgba(255,255,255,0.2)', margin: '0 4px', fontSize: '10px', display: 'flex', alignItems: 'center' }}>|</span>
+              <button
+                type="button"
+                onClick={() => colorInputRef.current?.click()}
+                style={{
+                  width: '14px',
+                  height: '14px',
+                  borderRadius: '4px',
+                  margin: '2px',
+                  border: theme === 'custom' ? '2px solid #ffffff' : 'none',
+                  background: 'conic-gradient(#f868c4, #fbbf24, #2dd4bf, #38bdf8, #7c6df2, #f868c4)',
+                  cursor: 'pointer',
+                  padding: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                title="Chọn màu tùy chỉnh"
+              >
+                <Palette size={8} style={{ color: '#fff', opacity: theme === 'custom' ? 1 : 0 }} />
+              </button>
+              <input
+                type="color"
+                ref={colorInputRef}
+                value={customAccent}
+                onChange={e => {
+                  setCustomAccent(e.target.value);
+                  setTheme('custom');
+                }}
+                style={{ display: 'none' }}
+              />
             </div>
 
             {/* Edit Slide Button */}
@@ -556,6 +689,7 @@ export function SlidePresentation({
                 fontSize: '12px',
               }}
             />
+
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '4px' }}>
               <button
                 type="button"
@@ -612,7 +746,7 @@ export function SlidePresentation({
                     fontStyle: 'italic',
                   }}
                 >
-                  {currentSlide.subtitle}
+                  {renderMarkdownSemibold(currentSlide.subtitle)}
                 </p>
               )}
             </div>
@@ -650,7 +784,7 @@ export function SlidePresentation({
                   >
                     •
                   </span>
-                  <span>{bullet}</span>
+                  <span>{renderMarkdownSemibold(bullet)}</span>
                 </li>
               ))}
             </ul>
@@ -673,7 +807,8 @@ export function SlidePresentation({
               >
                 <Sparkles size={14} style={{ color: themeStyles.accent, flexShrink: 0 }} />
                 <span>
-                  <strong>Điểm cốt lõi:</strong> {currentSlide.keyTakeaway}
+                  <strong style={{ fontWeight: 600, color: themeStyles.accent }}>Điểm cốt lõi:</strong>{' '}
+                  {renderMarkdownSemibold(currentSlide.keyTakeaway)}
                 </span>
               </div>
             )}
@@ -692,7 +827,26 @@ export function SlidePresentation({
             color: '#64748b',
           }}
         >
-          <span>LMS Assistant AI · {deck.topic || courseTitle}</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            LMS Assistant AI · {isEditingTopic ? (
+              <input
+                autoFocus
+                value={editTopicValue}
+                onChange={e => setEditTopicValue(e.target.value)}
+                onBlur={() => { setDeck(prev => ({ ...prev, topic: editTopicValue.trim() || prev.topic })); setIsEditingTopic(false); }}
+                onKeyDown={e => { if (e.key === 'Enter') { e.currentTarget.blur(); } if (e.key === 'Escape') { setIsEditingTopic(false); } }}
+                style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid #7c6df2', borderRadius: '4px', padding: '1px 6px', color: '#e2e8f0', fontSize: '11px', width: '160px' }}
+              />
+            ) : (
+              <span
+                onClick={() => { setEditTopicValue(deck.topic || courseTitle); setIsEditingTopic(true); }}
+                style={{ cursor: 'pointer', borderBottom: '1px dashed rgba(255,255,255,0.2)', paddingBottom: '1px' }}
+                title="Nhấp để sửa chủ đề"
+              >
+                {deck.topic || courseTitle}
+              </span>
+            )}
+          </span>
           <span style={{ fontWeight: 600 }}>Trang {currentIdx + 1} / {slides.length}</span>
         </div>
       </div>
@@ -703,12 +857,15 @@ export function SlidePresentation({
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          background: '#131122',
-          border: '1px solid rgba(124, 109, 242, 0.25)',
+          background: 'rgba(20, 17, 30, 0.62)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
           borderRadius: '12px',
           padding: '8px 16px',
           gap: '12px',
           flexWrap: 'wrap',
+          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.3)',
         }}
       >
         {/* Slide Management: Add / Delete */}
@@ -717,9 +874,9 @@ export function SlidePresentation({
             type="button"
             onClick={handleAddSlide}
             style={{
-              background: 'rgba(124, 109, 242, 0.15)',
-              color: '#cfc8ff',
-              border: '1px solid rgba(124, 109, 242, 0.35)',
+              background: 'rgba(142, 123, 227, 0.18)',
+              color: '#ffd1f0',
+              border: '1px solid rgba(142, 123, 227, 0.32)',
               borderRadius: '6px',
               padding: '4px 10px',
               fontSize: '12px',
@@ -767,8 +924,8 @@ export function SlidePresentation({
               width: '32px',
               height: '32px',
               borderRadius: '8px',
-              background: currentIdx === 0 ? 'rgba(255,255,255,0.04)' : 'rgba(124, 109, 242, 0.2)',
-              border: '1px solid rgba(124, 109, 242, 0.35)',
+              background: currentIdx === 0 ? 'rgba(255, 255, 255, 0.03)' : 'rgba(142, 123, 227, 0.2)',
+              border: currentIdx === 0 ? '1px solid rgba(255, 255, 255, 0.06)' : '1px solid rgba(142, 123, 227, 0.35)',
               color: currentIdx === 0 ? '#475569' : '#ffffff',
               display: 'flex',
               alignItems: 'center',
@@ -801,8 +958,11 @@ export function SlidePresentation({
               height: '32px',
               borderRadius: '8px',
               background:
-                currentIdx === slides.length - 1 ? 'rgba(255,255,255,0.04)' : 'rgba(124, 109, 242, 0.2)',
-              border: '1px solid rgba(124, 109, 242, 0.35)',
+                currentIdx === slides.length - 1 ? 'rgba(255, 255, 255, 0.03)' : 'rgba(142, 123, 227, 0.2)',
+              border:
+                currentIdx === slides.length - 1
+                  ? '1px solid rgba(255, 255, 255, 0.06)'
+                  : '1px solid rgba(142, 123, 227, 0.35)',
               color: currentIdx === slides.length - 1 ? '#475569' : '#ffffff',
               display: 'flex',
               alignItems: 'center',
@@ -821,9 +981,9 @@ export function SlidePresentation({
             type="button"
             onClick={() => setShowNotes(prev => !prev)}
             style={{
-              background: showNotes ? 'rgba(124, 109, 242, 0.3)' : 'rgba(255,255,255,0.06)',
-              color: showNotes ? '#e0d8ff' : '#94a3b8',
-              border: '1px solid rgba(124, 109, 242, 0.3)',
+              background: showNotes ? 'rgba(248, 104, 196, 0.22)' : 'rgba(255, 255, 255, 0.05)',
+              color: showNotes ? '#ffd1f0' : '#94a3b8',
+              border: showNotes ? '1px solid rgba(248, 104, 196, 0.45)' : '1px solid rgba(255, 255, 255, 0.08)',
               borderRadius: '6px',
               padding: '4px 10px',
               fontSize: '12px',
@@ -835,20 +995,21 @@ export function SlidePresentation({
             }}
             title="Bật/tắt khung hiển thị Lời giảng / Ghi chú thuyết trình (Phím tắt: N)"
           >
-            <Volume2 size={13} style={{ color: showNotes ? '#a594fd' : undefined }} />
+            <Volume2 size={13} style={{ color: showNotes ? '#f868c4' : undefined }} />
             <span>Lời giảng</span>
           </button>
         </div>
       </div>
 
-      {/* Thumbnail Strip / Slide Picker */}
+      {/* Compact Slide Dot Picker */}
       <div
         style={{
           display: 'flex',
-          gap: '8px',
-          overflowX: 'auto',
-          padding: '6px 2px',
-          scrollbarWidth: 'thin',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '6px',
+          padding: '6px 8px',
+          flexWrap: 'wrap',
         }}
       >
         {slides.map((s, idx) => (
@@ -857,46 +1018,21 @@ export function SlidePresentation({
             type="button"
             onClick={() => setCurrentIdx(idx)}
             style={{
-              flex: '0 0 110px',
-              aspectRatio: '16 / 9',
-              borderRadius: '8px',
-              background: currentIdx === idx ? '#1e1b4b' : '#0f172a',
-              border: currentIdx === idx ? '2px solid #7c6df2' : '1px solid rgba(255,255,255,0.1)',
-              padding: '6px 8px',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
+              width: currentIdx === idx ? '24px' : '8px',
+              height: '8px',
+              borderRadius: '4px',
+              background: currentIdx === idx
+                ? 'linear-gradient(135deg, #f868c4, #8e7be3)'
+                : 'rgba(255, 255, 255, 0.15)',
+              border: 'none',
+              padding: 0,
               cursor: 'pointer',
-              textAlign: 'left',
-              transition: 'all 0.15s ease',
-              boxShadow: currentIdx === idx ? '0 0 12px rgba(124, 109, 242, 0.4)' : 'none',
+              transition: 'all 0.2s ease',
+              boxShadow: currentIdx === idx ? '0 0 8px rgba(248, 104, 196, 0.5)' : 'none',
+              flexShrink: 0,
             }}
-            title={`Slide ${idx + 1}: ${s.title}`}
-          >
-            <div
-              style={{
-                fontSize: '9px',
-                fontWeight: 700,
-                color: currentIdx === idx ? '#a594fd' : '#94a3b8',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {idx + 1}. {s.title}
-            </div>
-            <div
-              style={{
-                fontSize: '8px',
-                color: '#64748b',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {s.bullets?.[0] || 'Nội dung'}
-            </div>
-          </button>
+            title={`${idx + 1}. ${stripMarkdown(s.title)}`}
+          />
         ))}
       </div>
 
@@ -904,11 +1040,14 @@ export function SlidePresentation({
       {showNotes && (
         <div
           style={{
-            background: 'rgba(20, 18, 35, 0.85)',
-            border: '1px solid rgba(124, 109, 242, 0.3)',
+            background: 'rgba(20, 17, 30, 0.62)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
             borderRadius: '10px',
             padding: '12px 16px',
             marginTop: '4px',
+            boxShadow: '0 8px 30px rgba(0, 0, 0, 0.35)',
           }}
         >
           <div
@@ -941,7 +1080,9 @@ export function SlidePresentation({
               whiteSpace: 'pre-wrap',
             }}
           >
-            {currentSlide?.notes || 'Không có ghi chú riêng cho slide này.'}
+            {currentSlide?.notes
+              ? renderMarkdownSemibold(currentSlide.notes)
+              : 'Không có ghi chú riêng cho slide này.'}
           </p>
         </div>
       )}

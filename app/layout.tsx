@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Geist } from 'next/font/google';
 import './globals.css';
 import { NotificationManager } from '@/app/components/NotificationManager';
+import { AuraBackground } from '@/app/components/AuraBackground';
 
 const geist = Geist({ variable: '--font-geist-sans', subsets: ['latin', 'latin-ext'] });
 
@@ -34,7 +35,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="vi" className="dark">
       <body className={geist.variable}>
         <NotificationManager />
-        {children}
+        <AuraBackground>
+          {children}
+        </AuraBackground>
       </body>
     </html>
   );

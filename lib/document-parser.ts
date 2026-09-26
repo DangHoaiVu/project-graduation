@@ -1,4 +1,77 @@
 import { extractText } from 'unpdf';
+import JSZip from 'jszip';
+
+/**
+ * Extracts plain text from a DOCX (Office Open XML) buffer using JSZip.
+ */
+export async function extractDocxText(buffer: ArrayBuffer | Uint8Array): Promise<string> {
+  try {
+    const zip = await JSZip.loadAsync(buffer);
+    const docXmlFile = zip.file('word/document.xml');
+    if (!docXmlFile) return '';
+    const xml = await docXmlFile.async('text');
+    const text = xml
+      .replace(/<\/w:p>/g, '\n')
+      .replace(/<w:tab\/>/g, '\t')
+      .replace(/<w:br\/>/g, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .join('\n');
+    return text;
+  } catch (err) {
+    console.warn('Error extracting text from docx:', err);
+    return '';
+  }
+}
+
+/**
+ * Extracts slide texts from a PPTX (Office Open XML) buffer using JSZip.
+ */
+export async function extractPptxText(buffer: ArrayBuffer | Uint8Array): Promise<string> {
+  try {
+    const zip = await JSZip.loadAsync(buffer);
+    const slideFiles = Object.keys(zip.files)
+      .filter(f => f.startsWith('ppt/slides/slide') && f.endsWith('.xml'))
+      .sort((a, b) => {
+        const numA = parseInt(a.replace(/\D/g, ''), 10) || 0;
+        const numB = parseInt(b.replace(/\D/g, ''), 10) || 0;
+        return numA - numB;
+      });
+
+    const slidesText: string[] = [];
+    for (let i = 0; i < slideFiles.length; i++) {
+      const file = zip.file(slideFiles[i]);
+      if (!file) continue;
+      const xml = await file.async('text');
+      const slideText = xml
+        .replace(/<\/a:p>/g, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .join(' ');
+      if (slideText) {
+        slidesText.push(`[Slide ${i + 1}]\n${slideText}`);
+      }
+    }
+    return slidesText.join('\n\n');
+  } catch (err) {
+    console.warn('Error extracting text from pptx:', err);
+    return '';
+  }
+}
 
 // In-memory cache for parsed document texts during the session
 const MAX_PARSED_CACHE = 50;
@@ -37,6 +110,22 @@ function setDocumentCache(key: string, value: string): void {
   documentTextCache.set(key, value);
 }
 
+const failedUrls = new Map<string, number>(); // url -> timestamp
+
+function isUrlTemporarilyFailed(url: string): boolean {
+  const failedAt = failedUrls.get(url);
+  if (!failedAt) return false;
+  if (Date.now() - failedAt > 15 * 60 * 1000) {
+    failedUrls.delete(url);
+    return false;
+  }
+  return true;
+}
+
+function markUrlFailed(url: string) {
+  failedUrls.set(url, Date.now());
+}
+
 export async function parseDocumentFromUrl(
   url: string,
   fileName: string,
@@ -45,6 +134,10 @@ export async function parseDocumentFromUrl(
   const cacheKey = `${fileName}::${url}`;
   if (documentTextCache.has(cacheKey)) {
     return documentTextCache.get(cacheKey)!;
+  }
+
+  if (isUrlTemporarilyFailed(url)) {
+    return '';
   }
 
   try {
@@ -77,7 +170,7 @@ export async function parseDocumentFromUrl(
             'X-With-Generated-Alt': 'true',
             Accept: 'text/markdown, text/plain',
           },
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(3500),
         });
 
         if (jinaRes.ok) {
@@ -87,14 +180,17 @@ export async function parseDocumentFromUrl(
             return markdown.trim();
           }
         }
-      } catch (jinaErr) {
-        console.warn(`Jina Reader direct attempt for ${fetchUrl} skipped/failed:`, jinaErr);
+      } catch {
+        // Fast skip Jina reader if timeout or blocked
       }
     }
 
-    const response = await fetch(fetchUrl, { headers, signal: AbortSignal.timeout(10000) });
+    const response = await fetch(fetchUrl, { headers, signal: AbortSignal.timeout(4000) });
     if (!response.ok) {
       console.warn(`Failed to fetch document from ${fetchUrl}: status ${response.status}`);
+      if (response.status === 403 || response.status === 404 || response.status >= 500) {
+        markUrlFailed(fetchUrl);
+      }
       return '';
     }
 
@@ -118,6 +214,32 @@ export async function parseDocumentFromUrl(
       if (fullText.trim()) {
         setDocumentCache(cacheKey, fullText);
         return fullText;
+      }
+    }
+
+    // For Word documents (.docx)
+    const isDocx =
+      lowerName.endsWith('.docx') ||
+      contentType.includes('wordprocessingml') ||
+      contentType.includes('application/vnd.openxmlformats-officedocument.wordprocessingml');
+    if (isDocx) {
+      const docxText = await extractDocxText(arrayBuffer);
+      if (docxText.trim()) {
+        setDocumentCache(cacheKey, docxText);
+        return docxText;
+      }
+    }
+
+    // For PowerPoint presentations (.pptx)
+    const isPptx =
+      lowerName.endsWith('.pptx') ||
+      contentType.includes('presentationml') ||
+      contentType.includes('application/vnd.openxmlformats-officedocument.presentationml');
+    if (isPptx) {
+      const pptxText = await extractPptxText(arrayBuffer);
+      if (pptxText.trim()) {
+        setDocumentCache(cacheKey, pptxText);
+        return pptxText;
       }
     }
 
@@ -279,6 +401,12 @@ export async function parseDocumentBuffer(buffer: ArrayBuffer | Uint8Array, file
         return text.map((pageStr, idx) => `[Trang ${idx + 1}]\n${pageStr}`).join('\n\n');
       }
       return String(text || '');
+    }
+    if (lowerName.endsWith('.docx')) {
+      return await extractDocxText(buffer);
+    }
+    if (lowerName.endsWith('.pptx')) {
+      return await extractPptxText(buffer);
     }
     if (lowerName.endsWith('.txt')) {
       const decoder = new TextDecoder('utf-8');

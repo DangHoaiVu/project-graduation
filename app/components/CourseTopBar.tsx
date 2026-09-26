@@ -1,9 +1,22 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { Bell, FileText, RotateCcw } from 'lucide-react';
+import { Bell, FileText, RotateCcw, Megaphone, GraduationCap, ExternalLink, Clock, CheckSquare } from 'lucide-react';
 import type { MoodleUser } from '@/app/types';
+
+export interface NotificationItem {
+  id: number | string;
+  name?: string;
+  title?: string;
+  courseName?: string;
+  eventType?: string;
+  timestamp: number;
+  url?: string;
+  moodleEventId?: number | null;
+  moodleCourseId?: number | null;
+  eventDetails?: string | null;
+}
 
 export interface CourseTopBarProps {
   search: string;
@@ -16,16 +29,14 @@ export interface CourseTopBarProps {
   onCloseNotifications: () => void;
   notificationPermission?: NotificationPermission;
   onRequestNotificationPermission?: () => Promise<void> | void;
-  deadlines?: Array<{
-    id: number | string;
-    name: string;
-    courseName: string;
-    timestamp: number;
-    url?: string;
-  }>;
+  deadlines?: NotificationItem[];
+  events?: NotificationItem[];
+  courses?: Array<{ id?: number | string; name: string; code?: string }>;
   user?: MoodleUser | null;
   displayName: string;
   onOpenProfile: () => void;
+  onOpenNotification?: (item: NotificationItem) => void;
+  lmsUrl?: string;
 }
 
 export function CourseTopBar({
@@ -39,12 +50,74 @@ export function CourseTopBar({
   onCloseNotifications,
   notificationPermission = 'default',
   onRequestNotificationPermission,
-  deadlines = [],
+  deadlines,
+  events: propEvents,
+  courses,
   user,
   displayName,
   onOpenProfile,
+  onOpenNotification,
+  lmsUrl,
 }: CourseTopBarProps) {
   const notifRef = useRef<HTMLDivElement>(null);
+  const [dbEvents, setDbEvents] = useState<NotificationItem[]>([]);
+  const [loadingEvents, setLoadingEvents] = useState(false);
+  const prevSyncingRef = useRef(syncing);
+
+  // Fetch notifications from events table
+  const fetchDbNotifications = useCallback(async () => {
+    let uid = user?.id;
+    if (!uid && typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem('moodleUser');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          uid = parsed?.id;
+        }
+      } catch {
+        // ignore parse error
+      }
+    }
+    if (!uid) return;
+
+    try {
+      setLoadingEvents(true);
+      const res = await fetch(`/api/notifications?userId=${uid}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = (await res.json()) as { success?: boolean; events?: NotificationItem[] };
+        if (data && Array.isArray(data.events)) {
+          setDbEvents(data.events);
+        }
+      }
+    } catch (err) {
+      console.warn('Error loading notifications from events table:', err);
+    } finally {
+      setLoadingEvents(false);
+    }
+  }, [user?.id]);
+
+  // Load events on mount / user change
+  useEffect(() => {
+    void fetchDbNotifications();
+  }, [fetchDbNotifications]);
+
+  // Re-fetch when notification dialog opens
+  useEffect(() => {
+    if (notifications) {
+      void fetchDbNotifications();
+    }
+  }, [notifications, fetchDbNotifications]);
+
+  // Re-fetch when syncing finishes
+  useEffect(() => {
+    if (prevSyncingRef.current && !syncing) {
+      void fetchDbNotifications();
+    }
+    prevSyncingRef.current = syncing;
+  }, [syncing, fetchDbNotifications]);
+
+  // Active notification list: priorize propEvents if explicitly passed, otherwise use dbEvents from events table
+  const displayEvents: NotificationItem[] = propEvents ?? dbEvents;
 
   // Close notifications popover on click outside
   useEffect(() => {
@@ -116,14 +189,14 @@ export function CourseTopBar({
             title="Thông báo"
           >
             <Bell size={17} />
-            {deadlines.length > 0 && <span className="course-topbar-unread-dot" />}
+            {displayEvents.length > 0 && <span className="course-topbar-unread-dot" />}
           </button>
 
           {/* Notification Popover */}
           {notifications && (
             <div className="course-topbar-popover" role="dialog" aria-modal="true">
               <header className="course-topbar-popover-header">
-                <strong>Thông báo ({deadlines.length})</strong>
+                <strong>Thông báo ({displayEvents.length})</strong>
                 <button
                   type="button"
                   onClick={onCloseNotifications}
@@ -135,7 +208,7 @@ export function CourseTopBar({
               </header>
 
               <div className="course-topbar-popover-content">
-                {notificationPermission !== 'granted' && (
+                {Boolean(onRequestNotificationPermission) && notificationPermission !== 'granted' && (
                   <button
                     type="button"
                     className="notification-permission-button"
@@ -145,18 +218,77 @@ export function CourseTopBar({
                     {notificationPermission === 'denied' ? 'Thông báo đang bị chặn trong trình duyệt' : 'Bật thông báo nhắc hạn'}
                   </button>
                 )}
-                {deadlines.length > 0 ? (
-                  deadlines.slice(0, 4).map(d => {
+                {displayEvents.length > 0 ? (
+                  displayEvents.map(d => {
                     const date = new Date(d.timestamp);
+                    const titleText = d.title || d.name || 'Thông báo';
+                    const isManual = d.eventType === 'manual';
+                    const isAttendance =
+                      !isManual &&
+                      (d.eventType === 'attendance' ||
+                        titleText.toLowerCase().includes('attendance') ||
+                        titleText.toLowerCase().includes('điểm danh') ||
+                        (d.url && d.url.toLowerCase().includes('/mod/attendance/')));
+                    const isExam =
+                      !isManual &&
+                      !isAttendance &&
+                      (d.eventType === 'quiz' ||
+                        d.eventType === 'exam' ||
+                        titleText.toLowerCase().includes('thi') ||
+                        titleText.toLowerCase().includes('kiểm tra') ||
+                        titleText.toLowerCase().includes('quiz') ||
+                        (d.url && d.url.toLowerCase().includes('/mod/quiz/')));
+                    const resolvedCourseName =
+                      d.courseName ||
+                      (courses && d.moodleCourseId
+                        ? courses.find(c => Number(c.id) === Number(d.moodleCourseId))?.name
+                        : undefined);
+                    const notifWithCourse: NotificationItem = resolvedCourseName && resolvedCourseName !== d.courseName
+                      ? { ...d, courseName: resolvedCourseName }
+                      : d;
+
+                    let badgeBg = undefined;
+                    let badgeColor = undefined;
+                    if (isManual) {
+                      badgeBg = 'rgba(236, 72, 153, 0.15)';
+                      badgeColor = '#ec4899';
+                    } else if (isAttendance) {
+                      badgeBg = 'rgba(59, 130, 246, 0.15)';
+                      badgeColor = '#60a5fa';
+                    } else if (isExam) {
+                      badgeBg = 'rgba(245, 158, 11, 0.15)';
+                      badgeColor = '#fbbf24';
+                    }
+
                     return (
-                      <div key={d.id} className="course-topbar-notif-item">
-                        <span className="course-topbar-notif-badge">
-                          <FileText size={14} />
+                      <div
+                        key={d.id}
+                        className="course-topbar-notif-item"
+                        onClick={() => {
+                          onCloseNotifications();
+                          onOpenNotification?.(notifWithCourse);
+                        }}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            onCloseNotifications();
+                            onOpenNotification?.(notifWithCourse);
+                          }
+                        }}
+                      >
+                        <span className={`course-topbar-notif-badge ${isManual ? 'manual' : ''}`} style={badgeBg ? { backgroundColor: badgeBg, color: badgeColor } : undefined}>
+                          {isManual ? <Megaphone size={14} /> : isAttendance ? <Clock size={14} /> : isExam ? <CheckSquare size={14} /> : <FileText size={14} />}
                         </span>
-                        <div className="course-topbar-notif-text">
-                          <b>{d.name}</b>
+                        <div className="course-topbar-notif-text" style={{ flex: 1, minWidth: 0 }}>
+                          <b>{resolvedCourseName ? `${resolvedCourseName}: ${titleText}` : titleText}</b>
+                          {isManual && d.eventDetails && (
+                            <p style={{ margin: '2px 0 3px', fontSize: '11px', color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {d.eventDetails}
+                            </p>
+                          )}
                           <small>
-                            {d.courseName} · hạn{' '}
+                            {isManual ? 'sự kiện ' : isAttendance ? 'điểm danh ' : isExam ? 'kiểm tra ' : 'hạn nộp '}
                             {date.toLocaleString('vi-VN', {
                               day: '2-digit',
                               month: '2-digit',

@@ -8,6 +8,8 @@ export type Course = {
   next: string;
   role?: string;
   isTeacher?: boolean;
+  startdate?: number;
+  lastaccess?: number;
 };
 
 export type LibraryFile = {
@@ -26,7 +28,15 @@ export type CourseSourceItem = {
   type: 'PDF' | 'DOCX' | 'PPTX' | 'LINK' | 'TXT' | string;
   sizeOrPages?: string;
   url?: string;
+  content?: string;
   courseCode?: string;
+  courseId?: number;
+  fileId?: number;
+  moduleId?: number;
+  sectionId?: number;
+  sectionName?: string;
+  chapter?: string | number;
+  isStudentUpload?: boolean;
 };
 
 export type CitationSource = {
@@ -40,6 +50,8 @@ export type ChatMessage = {
   role: 'user' | 'ai';
   text: string;
   sources?: Array<string | CitationSource>;
+  model?: string;
+  provider?: string;
 };
 
 export type MatchingPair = {
@@ -63,6 +75,10 @@ export type MoodleResource = {
   courseCode?: string;
   courseName?: string;
   module?: string;
+  moduleId?: number;
+  fileId?: number;
+  sectionId?: number;
+  sectionName?: string;
   type?: string;
   name: string;
   url: string;
@@ -97,6 +113,7 @@ export type QuestionAnalysisItem = {
   mark: string;
   maxmark: number;
   feedback?: string;
+  explanation?: string;
   diagnosedReason?: string;
 };
 
@@ -131,8 +148,19 @@ export type MoodleData = {
     progress?: number;
     role?: string;
     isTeacher?: boolean;
+    startdate?: number;
+    lastaccess?: number;
   }>;
-  deadlines: Array<{ id: number; name: string; courseName: string; timestamp: number; url?: string }>;
+  deadlines: Array<{
+    id: number;
+    name: string;
+    courseName: string;
+    timestamp: number;
+    url?: string;
+    description?: string;
+    modulename?: string;
+    eventtype?: string;
+  }>;
   resources: MoodleResource[];
   examResults?: ExamResult[];
   latestResult?: ExamResult | null;
@@ -182,5 +210,19 @@ export type UploadResponse = ErrorResponse & {
 export type QuizResponse = ErrorResponse & {
   questions?: QuizQuestion[];
   mode?: string;
+};
+
+export type ManualEventItem = {
+  id: string;
+  moodleEventId?: number | null;
+  moodleCourseId?: number | null;
+  courseName?: string | null;
+  eventType: string;
+  title: string;
+  deliverTime: string;
+  timestamp: number;
+  sentReminders: number[];
+  eventDetails?: string | null;
+  createdAt?: string;
 };
 

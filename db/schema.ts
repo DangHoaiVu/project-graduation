@@ -99,6 +99,30 @@ export const pushQueue = pgTable('push_queue', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 });
 
+// Bảng events: Quản lý sự kiện thông báo tập trung theo môn học (mỗi moodle_event_id là duy nhất)
+export const events = pgTable('events', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  moodleEventId: integer('moodle_event_id').unique(),
+  eventType: varchar('event_type', { length: 50 }).notNull(),
+  title: varchar('title', { length: 255 }).notNull(),
+  deliverTime: timestamp('deliver_time', { withTimezone: true }).notNull(),
+  sentReminders: integer('sent_reminders').array().default([]),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  moodleCourseId: integer('moodle_course_id'),
+  eventDetails: text('event_details'),
+});
+
+// Bảng user_courses: Ánh xạ sinh viên - môn học để điều hướng thông báo
+export const userCourses = pgTable('user_courses', {
+  userId: integer('user_id')
+    .references(() => users.moodleUserId, { onDelete: 'cascade' })
+    .notNull(),
+  moodleCourseId: integer('moodle_course_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, table => ({
+  pk: primaryKey({ columns: [table.userId, table.moodleCourseId] }),
+}));
+
 // TypeScript types
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
@@ -126,4 +150,25 @@ export type NewMoodleEvent = typeof moodleEvents.$inferInsert;
 
 export type PushQueueItem = typeof pushQueue.$inferSelect;
 export type NewPushQueueItem = typeof pushQueue.$inferInsert;
+
+export type Event = typeof events.$inferSelect;
+export type NewEvent = typeof events.$inferInsert;
+
+export type UserCourse = typeof userCourses.$inferSelect;
+export type NewUserCourse = typeof userCourses.$inferInsert;
+
+// Bảng document_embeddings: Vector database pgvector cho tài liệu LMS
+export const documentEmbeddings = pgTable('document_embeddings', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  moodleCourseId: integer('moodle_course_id').notNull(),
+  documentTitle: varchar('document_title', { length: 255 }).notNull(),
+  pageNumber: integer('page_number'),
+  chunkText: text('chunk_text').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  moodleFileId: integer('moodle_file_id').notNull(),
+});
+
+export type DocumentEmbedding = typeof documentEmbeddings.$inferSelect;
+export type NewDocumentEmbedding = typeof documentEmbeddings.$inferInsert;
+
 

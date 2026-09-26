@@ -5,10 +5,10 @@ import { cleanAnswerText } from '@/lib/moodle-quiz-parser';
 export { cleanAnswerText };
 
 export type GradeContextMode =
-  | 'full_insight'       // has_details: true, has_feedback: true (Toàn tri)
-  | 'tech_analysis'      // has_details: true, has_feedback: false (Phân tích kỹ thuật)
-  | 'amplification'      // has_details: false, has_feedback: true (Khuếch đại lời phê)
-  | 'interviewer_blind'; // has_details: false, has_feedback: false (Điểm mù - Phỏng vấn viên)
+  | 'full_insight'       // has_details: true, has_feedback: true (Chi tiết + Nhận xét)
+  | 'tech_analysis'      // has_details: true, has_feedback: false (Chi tiết câu hỏi)
+  | 'amplification'      // has_details: false, has_feedback: true (Nhận xét giảng viên)
+  | 'interviewer_blind'; // has_details: false, has_feedback: false (Điểm số tổng quan)
 
 export type GradeResponseStrategy =
   | 'roadmap'      // 📋 Lộ trình ôn tập & Hành động cụ thể
@@ -64,8 +64,8 @@ export interface GradeRouteInfo {
   actionType: 'modal' | 'chat';
   buttonLabel: string;
   buttonTooltip: string;
-  badgeText: string;
-  badgeColor: string;
+  badgeText?: string;
+  badgeColor?: string;
   buttonGradient?: string;
   borderColor?: string;
   prompt: string;
@@ -236,8 +236,7 @@ export function buildGradePrompt(
 }
 
 /**
- * Context Router resolving the 2x2 matrix for exam results:
- * [has_details, has_feedback] => Strategy & UX Action
+ * Evaluates an ExamResult and returns the appropriate action routing info.
  */
 export function resolveGradeRoute(
   res: ExamResult,
@@ -259,19 +258,19 @@ export function resolveGradeRoute(
   const ratio = maxScore > 0 ? scoreNum / maxScore : 0;
   const isHighScore = ratio >= 0.7;
 
-  // Case 1: Toàn tri (Full Insight) - has_details: true, has_feedback: true
+  // Case 1: has_details: true, has_feedback: true
   if (hasDetails && hasFeedback) {
     const prompt = buildGradePrompt(res, strategy || 'roadmap', detailLevel);
     return {
       hasDetails: true,
       hasFeedback: true,
       mode: 'full_insight',
-      modeName: 'Toàn tri (Full Insight)',
+      modeName: 'Chẩn đoán bài thi',
       defaultStrategy: 'roadmap',
       actionType: 'modal',
-      buttonLabel: isAnalyzed ? '✓ Xem lại chẩn đoán toàn diện' : '✦ Chẩn đoán toàn diện (AI)',
-      buttonTooltip: 'Dùng lời phê của giáo viên làm kim chỉ nam, kết hợp bóc tách chi tiết từng câu sai để vạch lộ trình ôn tập.',
-      badgeText: 'Toàn tri',
+      buttonLabel: isAnalyzed ? 'Xem lại phân tích' : 'Chẩn đoán bài thi',
+      buttonTooltip: 'Dùng lời phê của giáo viên kết hợp bóc tách chi tiết từng câu sai để vạch lộ trình ôn tập.',
+      badgeText: '',
       badgeColor: '#a855f7',
       buttonGradient: isAnalyzed
         ? 'linear-gradient(135deg, rgba(34, 197, 94, 0.25), rgba(168, 85, 247, 0.25))'
@@ -281,19 +280,19 @@ export function resolveGradeRoute(
     };
   }
 
-  // Case 2: Phân tích kỹ thuật (Technical Analysis) - has_details: true, has_feedback: false
+  // Case 2: has_details: true, has_feedback: false
   if (hasDetails && !hasFeedback) {
     const prompt = buildGradePrompt(res, strategy || 'deep_dive', detailLevel);
     return {
       hasDetails: true,
       hasFeedback: false,
       mode: 'tech_analysis',
-      modeName: 'Phân tích kỹ thuật (Technical Analysis)',
+      modeName: 'Chẩn đoán bài thi',
       defaultStrategy: 'deep_dive',
       actionType: 'modal',
-      buttonLabel: isAnalyzed ? 'Xem lại phân tích' : 'Chẩn đoán kỹ thuật (AI)',
-      buttonTooltip: 'Tự động phân nhóm các câu chọn sai, đối chiếu với tài liệu môn học để tự tìm ra lỗ hổng khái niệm cốt lõi.',
-      badgeText: 'Phân tích kỹ thuật',
+      buttonLabel: isAnalyzed ? 'Xem lại phân tích' : 'Chẩn đoán bài thi',
+      buttonTooltip: 'Tự động phân nhóm các câu chọn sai, đối chiếu với tài liệu môn học để tìm ra lỗ hổng khái niệm cốt lõi.',
+      badgeText: '',
       badgeColor: '#38bdf8',
       buttonGradient: isAnalyzed
         ? 'linear-gradient(135deg, rgba(34, 197, 94, 0.25), rgba(56, 189, 248, 0.25))'
@@ -303,19 +302,19 @@ export function resolveGradeRoute(
     };
   }
 
-  // Case 3: Khuếch đại (Amplification) - has_details: false, has_feedback: true
+  // Case 3: has_details: false, has_feedback: true
   if (!hasDetails && hasFeedback) {
     const prompt = buildGradePrompt(res, strategy || 'roadmap', detailLevel);
     return {
       hasDetails: false,
       hasFeedback: true,
       mode: 'amplification',
-      modeName: 'Khuếch đại (Amplification)',
+      modeName: 'Ôn tập theo nhận xét',
       defaultStrategy: 'roadmap',
       actionType: 'chat',
-      buttonLabel: 'Ôn tập theo lời phê',
-      buttonTooltip: 'Lấy nhận xét ngắn gọn của giảng viên làm lõi, chiếu theo đề cương tài liệu môn học để diễn giải chi tiết những gì cần làm tiếp theo.',
-      badgeText: 'Khuếch đại lời phê',
+      buttonLabel: 'Ôn tập theo nhận xét',
+      buttonTooltip: 'Lấy nhận xét của giảng viên làm trọng tâm, đối chiếu theo đề cương tài liệu môn học để gợi ý nội dung ôn tập.',
+      badgeText: '',
       badgeColor: '#f59e0b',
       buttonGradient: 'linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(234, 88, 12, 0.2))',
       borderColor: 'rgba(245, 158, 11, 0.45)',
@@ -323,19 +322,19 @@ export function resolveGradeRoute(
     };
   }
 
-  // Case 4: Điểm mù / Phỏng vấn viên (Blind Spot / The Interviewer) - has_details: false, has_feedback: false
+  // Case 4: has_details: false, has_feedback: false
   if (isHighScore) {
     const prompt = buildGradePrompt(res, strategy || 'practice', detailLevel);
     return {
       hasDetails: false,
       hasFeedback: false,
       mode: 'interviewer_blind',
-      modeName: 'Thử thách nâng cao (High Score)',
+      modeName: 'Luyện tập nâng cao',
       defaultStrategy: 'practice',
       actionType: 'chat',
-      buttonLabel: '⭐ Thử thách nâng cao cùng AI',
-      buttonTooltip: 'Kết quả xuất sắc! Hệ thống chuyển vai trò sang Thử Thách Viên để kiểm tra giới hạn tư duy.',
-      badgeText: 'Thử thách nâng cao',
+      buttonLabel: 'Luyện tập nâng cao',
+      buttonTooltip: 'Kết quả xuất sắc! AI sẽ đồng hành gợi mở các bài tập và tình huống nâng cao.',
+      badgeText: '',
       badgeColor: '#22c55e',
       buttonGradient: 'linear-gradient(135deg, rgba(34, 197, 94, 0.25), rgba(168, 85, 247, 0.2))',
       borderColor: 'rgba(34, 197, 94, 0.45)',
@@ -347,12 +346,12 @@ export function resolveGradeRoute(
       hasDetails: false,
       hasFeedback: false,
       mode: 'interviewer_blind',
-      modeName: 'Gỡ rối điểm mù (Remediation)',
+      modeName: 'Hỏi gia sư AI',
       defaultStrategy: 'socratic',
       actionType: 'chat',
-      buttonLabel: '💡 Gỡ rối điểm số cùng AI',
-      buttonTooltip: 'Hệ thống chưa có chi tiết bài làm. AI sẽ chủ động phỏng vấn gợi mở để giúp bạn tìm ra lỗ hổng.',
-      badgeText: 'Phỏng vấn gỡ rối',
+      buttonLabel: 'Hỏi gia sư AI',
+      buttonTooltip: 'Hệ thống chưa có chi tiết bài làm. AI sẽ chủ động gợi mở để cùng bạn làm rõ các khúc mắc.',
+      badgeText: '',
       badgeColor: '#ec4899',
       buttonGradient: 'linear-gradient(135deg, rgba(236, 72, 153, 0.25), rgba(139, 92, 246, 0.2))',
       borderColor: 'rgba(236, 72, 153, 0.45)',

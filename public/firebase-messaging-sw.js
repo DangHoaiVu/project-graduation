@@ -52,20 +52,23 @@ self.addEventListener('push', (event) => {
     return;
   }
 
-  // 2
-  // . Normal Display Notification: Display message with mandatory tag and deduplication
+  // 2. Normal Display Notification: Display message with mandatory tag and deduplication
   const title = payload.notification?.title || payload.data?.title || 'Thông báo LMS Assistant';
   const body = payload.notification?.body || payload.data?.body || '';
   const icon = payload.notification?.icon || payload.data?.icon || '/lms-assistant-icon.png';
-  const tag = payload.notification?.tag || payload.data?.tag || undefined;
+  const tag =
+    payload.notification?.tag ||
+    payload.data?.tag ||
+    (payload.data?.eventId ? `event-${payload.data.eventId}` : `lms-${Date.now()}`);
   const clickAction = payload.data?.url || payload.notification?.click_action || '/home';
 
   const notificationOptions = {
     body,
     icon,
     badge: '/lms-assistant-icon.png',
-    tag, // Crucial: assigns the event identifier (e.g. 'quiz_41') to avoid duplicate popups
+    tag, // Mandatory non-empty string when renotify is true
     renotify: true,
+    requireInteraction: true,
     data: {
       url: clickAction,
       tag,
@@ -76,12 +79,22 @@ self.addEventListener('push', (event) => {
 
   event.waitUntil(
     Promise.all([
-      self.registration.showNotification(title, notificationOptions),
+      self.registration
+        .showNotification(title, notificationOptions)
+        .catch((err) => {
+          console.error('[SW] showNotification failed with options, attempting fallback:', err);
+          return self.registration.showNotification(title, {
+            body,
+            icon: '/lms-assistant-icon.png',
+          });
+        }),
       // Forward push to open windows if any
       self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
         clients.forEach((client) => {
           client.postMessage({
             type: 'NOTIFICATION_RECEIVED',
+            title,
+            body,
             payload,
           });
         });

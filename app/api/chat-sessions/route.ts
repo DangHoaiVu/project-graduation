@@ -29,6 +29,15 @@ export async function GET(request: Request) {
       });
       if (sessions) {
         const filtered = sessionId ? sessions.filter((session) => session.id === sessionId) : sessions;
+        filtered.forEach((sess: any) => {
+          if (sess.response_model && Array.isArray(sess.messages)) {
+            sess.messages.forEach((msg: any) => {
+              if ((msg.role === 'ai' || msg.role === 'assistant') && !msg.model) {
+                msg.model = sess.response_model;
+              }
+            });
+          }
+        });
         return NextResponse.json({
           success: true,
           sessions: filtered,
@@ -113,12 +122,15 @@ export async function POST(request: Request) {
       userId?: number;
       userName?: string;
       moodleCourseId?: number;
+      response_model?: string;
+      responseModel?: string;
       messages: Array<{
         id?: string;
         role: 'user' | 'assistant' | 'ai' | 'model';
         content?: string;
         text?: string;
         timestamp?: number | string;
+        model?: string;
       }>;
     };
 
@@ -126,6 +138,8 @@ export async function POST(request: Request) {
     const userId = Number(body.userId) || 4; // default demo student ID
     const moodleCourseId = Number(body.moodleCourseId) || 1;
     const messages = Array.isArray(body.messages) ? body.messages : [];
+    const lastAiMsg = [...messages].reverse().find(m => m.role === 'ai' || m.role === 'assistant');
+    const response_model = body.response_model || body.responseModel || (lastAiMsg as any)?.model || undefined;
 
     try {
       let existingSessionId = targetSessionId;
@@ -138,13 +152,17 @@ export async function POST(request: Request) {
       }
 
       const sessionId = existingSessionId || crypto.randomUUID();
-      const session = await setFirebaseRow('chat_sessions', sessionId, {
+      const sessionData: Record<string, unknown> = {
         user_id: userId,
         moodle_course_id: moodleCourseId,
         messages,
         updated_at: new Date().toISOString(),
         created_at: new Date().toISOString(),
-      });
+      };
+      if (response_model) {
+        sessionData.response_model = response_model;
+      }
+      const session = await setFirebaseRow('chat_sessions', sessionId, sessionData);
       if (session) return NextResponse.json({ success: true, session });
     } catch (firebaseError) {
       console.warn('Firebase POST chat_sessions warning:', firebaseError);
@@ -157,10 +175,10 @@ export async function POST(request: Request) {
         await supabaseAdmin.from('users').upsert(
           {
             moodle_user_id: userId,
-            role: 'student',
-            name: body.userName || 'Sinh viên',
+            role: userId === 2 ? 'teacher' : 'student',
+            name: body.userName || (userId === 2 ? 'Admin User' : 'Sinh viên'),
           },
-          { onConflict: 'moodle_user_id' }
+          { onConflict: 'moodle_user_id', ignoreDuplicates: true }
         );
 
         let existingSessionId = targetSessionId;

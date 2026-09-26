@@ -8,6 +8,7 @@ import { saveLearningArtifact } from '@/lib/learning-artifacts';
 import { parseDocumentFromUrl } from '@/lib/document-parser';
 import { retrieveRelevantChunks, formatChunksForPrompt } from '@/lib/rag';
 import { getPersonalMaterials } from '@/lib/firebase-data';
+import { cleanSummaryData } from '@/lib/summary-cleaner';
 
 interface SourceItem {
   name: string;
@@ -214,14 +215,14 @@ export async function POST(request: Request) {
         } else {
           const maxPerDoc = Math.max(2500, Math.floor(25000 / compiledDocs.length));
           documentContext = compiledDocs
-            .map((doc, idx) => `[TÀI LIỆU ${idx + 1}: "${doc.title}"]\n${doc.text.slice(0, maxPerDoc)}`)
+            .map(doc => `=== NỘI DUNG TÀI LIỆU: "${doc.title}" ===\n${doc.text.slice(0, maxPerDoc)}`)
             .join('\n\n');
         }
       } catch (ragErr) {
         console.warn('RAG retrieval warning in study-tools:', ragErr);
         const maxPerDoc = Math.max(2500, Math.floor(25000 / compiledDocs.length));
         documentContext = compiledDocs
-          .map((doc, idx) => `[TÀI LIỆU ${idx + 1}: "${doc.title}"]\n${doc.text.slice(0, maxPerDoc)}`)
+          .map(doc => `=== NỘI DUNG TÀI LIỆU: "${doc.title}" ===\n${doc.text.slice(0, maxPerDoc)}`)
           .join('\n\n');
       }
     }
@@ -231,14 +232,19 @@ export async function POST(request: Request) {
     let shapeDesc = '';
 
     if (toolType === 'summary') {
+      const noCitationNotice = `\nQUY TẮC CỐT LÕI VỀ VĂN PHONG TÓM TẮT:
+- Trình bày kiến thức trực tiếp, khách quan, súc tích và tự nhiên như một cuốn sách giáo trình/cẩm nang chuẩn mực.
+- TUYỆT ĐỐI KHÔNG trích dẫn nguồn, số thứ tự tài liệu hoặc đánh dấu tham chiếu (NGHIÊM CẤM viết: "(tài liệu [1])", "tài liệu [x]", "[1]", "[2]", "theo tài liệu [x]", v.v.).
+- TUYỆT ĐỐI KHÔNG sử dụng các câu bình luận tham chiếu hay siêu ngôn ngữ (NGHIÊM CẤM viết: "Mặc dù không trực tiếp được đề cập trong tài liệu...", "Theo tài liệu...", "Tài liệu này cho biết...", "Tài liệu không nhắc đến...", v.v.).`;
+
       if (level === 'simple') {
-        levelInstruction = 'CẤP ĐỘ CƠ BẢN: Tóm tắt cực kỳ ngắn gọn, 1 đoạn tổng quan súc tích và chính xác 3-4 ý chính trọng tâm nhất.';
+        levelInstruction = `CẤP ĐỘ CƠ BẢN: Tóm tắt cực kỳ ngắn gọn, 1 đoạn tổng quan súc tích và chính xác 3-4 ý chính trọng tâm nhất.${noCitationNotice}`;
         shapeDesc = '{ "title": "Tiêu đề", "overview": "Tóm tắt 2-3 câu ngắn", "points": ["Ý 1", "Ý 2", "Ý 3"] }';
       } else if (level === 'complex') {
-        levelInstruction = 'CẤP ĐỘ CHUYÊN SÂU: Phân tích chuyên sâu toàn diện, đa chiều, chi tiết từng thành phần, thuật toán/công thức/cấu trúc và bài học ứng dụng thực tiễn với 8-12 luận điểm sâu sắc.';
+        levelInstruction = `CẤP ĐỘ CHUYÊN SÂU: Phân tích chuyên sâu toàn diện, đa chiều, chi tiết từng thành phần, thuật toán/công thức/cấu trúc và bài học ứng dụng thực tiễn với 8-12 luận điểm sâu sắc.${noCitationNotice}`;
         shapeDesc = '{ "title": "Tiêu đề chuyên sâu", "overview": "Bản phân tích tổng quan chi tiết và sâu sắc", "points": ["Luận điểm 1", "Luận điểm 2", "Luận điểm 3", "Luận điểm 4", "Luận điểm 5", "Luận điểm 6", "Luận điểm 7", "Luận điểm 8"] }';
       } else {
-        levelInstruction = 'CẤP ĐỘ TIÊU CHUẨN: Tóm tắt có cấu trúc đầy đủ, rõ ràng gồm 1 đoạn tổng quan và 5-7 ý chính quan trọng.';
+        levelInstruction = `CẤP ĐỘ TIÊU CHUẨN: Tóm tắt có cấu trúc đầy đủ, rõ ràng gồm 1 đoạn tổng quan và 5-7 ý chính quan trọng.${noCitationNotice}`;
         shapeDesc = '{ "title": "Tiêu đề", "overview": "Tổng quan môn học/chủ đề", "points": ["Ý 1", "Ý 2", "Ý 3", "Ý 4", "Ý 5", "Ý 6"] }';
       }
     } else if (toolType === 'mindmap') {
@@ -305,7 +311,7 @@ Không bao gồm bất kỳ văn bản ngoài hay markdown.`;
     try {
       throwIfRequestAborted(request, requestId);
       const result = await generateText(body.model, {
-        system: 'Bạn là chuyên gia sư phạm và kiến trúc tri thức. Luôn bảo đảm tuyệt đối tính chính xác lịch sử/khoa học, chống ảo giác và trả về JSON hợp lệ 100%.',
+        system: 'Bạn là chuyên gia sư phạm và kiến trúc tri thức. Luôn bảo đảm tuyệt đối tính chính xác lịch sử/khoa học, chống ảo giác và trả về JSON hợp lệ 100%. Tuyệt đối không chèn ký hiệu trích dẫn (như [1], (tài liệu x)) hay câu siêu ngôn ngữ nhắc về tài liệu.',
         userPrompt: prompt,
         signal: request.signal,
         temperature: 0.15,
@@ -317,7 +323,9 @@ Không bao gồm bất kỳ văn bản ngoài hay markdown.`;
       if (result.text) {
         const parsed = parseGeneratedJson(result.text) as Record<string, unknown> | unknown[];
         let data: unknown = parsed;
-        if (toolType === 'flashcards' && !Array.isArray(parsed)) {
+        if (toolType === 'summary') {
+          data = cleanSummaryData(parsed as any);
+        } else if (toolType === 'flashcards' && !Array.isArray(parsed)) {
           data = parsed.flashcards || parsed.cards || (Array.isArray(parsed) ? parsed : []);
         } else if (toolType === 'slides' || toolType === 'slide' || toolType === 'presentation') {
           data = !Array.isArray(parsed) && parsed.slides
@@ -329,11 +337,24 @@ Không bao gồm bất kỳ văn bản ngoài hay markdown.`;
         throwIfRequestAborted(request, requestId);
         const numericUserId = body.userId || 4;
         const targetCourseId = moodleCourseId || 1;
+        const artifactOrientation = toolType === 'mindmap' ? 'horizontal' : undefined;
+        const artifactContentData: Record<string, unknown> = {
+          name: topic,
+          topic,
+          level,
+          data: data as Record<string, unknown>,
+        };
+        if (artifactOrientation) {
+          artifactContentData.orientation = artifactOrientation;
+          if (data && typeof data === 'object') {
+            (data as Record<string, unknown>).orientation = artifactOrientation;
+          }
+        }
         const savedArtifact = await saveLearningArtifact({
           userId: numericUserId,
           moodleCourseId: targetCourseId,
           artifactType: toolType,
-          contentData: { name: topic, topic, level, data: data as Record<string, unknown> },
+          contentData: artifactContentData,
         }).catch(saveErr => {
           console.warn('saveLearningArtifact warning in study-tools:', saveErr);
         });

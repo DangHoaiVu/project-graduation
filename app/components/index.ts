@@ -8,4 +8,5 @@ export * from './GradePromptModal';
 export * from './CourseSwitcher';
 export * from './CourseHeader';
 export * from './CourseTopBar';
-
+export * from './CoursesView';
+export * from './AuraBackground';

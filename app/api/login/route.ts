@@ -16,6 +16,7 @@ type MoodleProfileResponse = {
   username?: string;
   userpictureurl?: string;
   exception?: string;
+  userissiteadmin?: boolean | number;
 };
 
 type LoginBody = {
@@ -89,13 +90,26 @@ export async function POST(request: Request) {
     const fullname = profileData.fullname ?? '';
     const username = profileData.username ?? identifier.trim();
 
+    // Determine user role: user ID 2 (Admin User), site admin, or teacher
+    let userRole = (userId === 2 || Boolean(profileData.userissiteadmin)) ? 'teacher' : 'student';
+
     // Sync user to users table
     if (supabaseAdmin) {
       try {
+        const { data: existingUser } = await supabaseAdmin
+          .from('users')
+          .select('role')
+          .eq('moodle_user_id', userId)
+          .maybeSingle();
+
+        if (existingUser?.role === 'teacher') {
+          userRole = 'teacher';
+        }
+
         await supabaseAdmin.from('users').upsert(
           {
             moodle_user_id: userId,
-            role: 'student',
+            role: userRole,
             name: fullname || username,
           },
           { onConflict: 'moodle_user_id' }
@@ -112,9 +126,11 @@ export async function POST(request: Request) {
         if (existing.length === 0) {
           await db.insert(users).values({
             moodleUserId: userId,
-            role: 'student',
+            role: userRole,
             name: fullname || username,
           });
+        } else if (existing[0].role !== userRole && userRole === 'teacher') {
+          await db.update(users).set({ role: userRole }).where(eq(users.moodleUserId, userId));
         }
       } catch (dbErr) {
         console.warn('Drizzle login sync warning:', dbErr);
@@ -128,6 +144,7 @@ export async function POST(request: Request) {
         id: userId,
         fullname,
         username,
+        role: userRole,
         avatarUrl: `/api/moodle/avatar?token=${encodeURIComponent(tokenData.token)}&id=${userId}`,
       },
     });

@@ -13,6 +13,7 @@ function sanitizeAnalysis(data: QuizAnalysisData): QuizAnalysisData {
       ...q,
       studentAnswer: cleanAnswerText(q.studentAnswer),
       rightAnswer: cleanAnswerText(q.rightAnswer),
+      explanation: q.explanation || q.feedback || '',
     })),
   };
 }
@@ -56,8 +57,10 @@ export function saveStoredAnalysis(attemptId: number | string, data: QuizAnalysi
 export function removeStoredAnalysis(attemptId: number | string): void {
   if (typeof window === 'undefined') return;
   try {
+    const numId = Number(attemptId);
+    localStorage.removeItem(`${PREFIX}${numId}`);
     localStorage.removeItem(`${PREFIX}${attemptId}`);
-    const next = getAllStoredAttemptIds().filter(id => Number(id) !== Number(attemptId));
+    const next = getAllStoredAttemptIds().filter(id => Number(id) !== numId);
     localStorage.setItem(INDEX_KEY, JSON.stringify(next));
   } catch (e) {
     console.warn('Failed to remove quiz analysis from localStorage:', e);
@@ -65,16 +68,55 @@ export function removeStoredAnalysis(attemptId: number | string): void {
 }
 
 /**
- * Get all attempt IDs that have been cached in browser localStorage
+ * Get all attempt IDs that have valid cached diagnoses in browser localStorage
  */
 export function getAllStoredAttemptIds(): number[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(INDEX_KEY);
     if (!raw) return [];
-    return JSON.parse(raw) as number[];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    const validIds: number[] = [];
+    for (const item of parsed) {
+      const numId = Number(item);
+      if (!Number.isFinite(numId)) continue;
+      const dataStr = localStorage.getItem(`${PREFIX}${numId}`);
+      if (dataStr) {
+        try {
+          const parsedObj = JSON.parse(dataStr);
+          if (parsedObj && (Array.isArray(parsedObj.questionsAnalysis) || parsedObj.quizName || parsedObj.questions)) {
+            if (!validIds.includes(numId)) validIds.push(numId);
+            continue;
+          }
+        } catch {}
+      }
+      // Dead key with no actual diagnosis content: purge from localStorage
+      localStorage.removeItem(`${PREFIX}${numId}`);
+    }
+
+    if (validIds.length !== parsed.length) {
+      localStorage.setItem(INDEX_KEY, JSON.stringify(validIds));
+    }
+    return validIds;
   } catch {
     return [];
+  }
+}
+
+export function hasStoredAnalysis(attemptId: number | string): boolean {
+  return getStoredAnalysis(attemptId) !== null;
+}
+
+export function clearAllStoredAnalyses(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const ids = getAllStoredAttemptIds();
+    ids.forEach(id => localStorage.removeItem(`${PREFIX}${id}`));
+    localStorage.removeItem(INDEX_KEY);
+  } catch (e) {
+    console.warn('Failed to clear stored analyses:', e);
   }
 }
 

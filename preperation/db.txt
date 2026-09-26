@@ -24,31 +24,15 @@ CREATE TABLE public.moodle_credentials (
   CONSTRAINT moodle_credentials_pkey PRIMARY KEY (user_id),
   CONSTRAINT moodle_credentials_user_id_users_moodle_user_id_fk FOREIGN KEY (user_id) REFERENCES public.users(moodle_user_id)
 );
-CREATE TABLE public.notification_deliveries (
-  user_id integer NOT NULL,
-  event_id integer NOT NULL,
-  event_type character varying NOT NULL,
-  reminder_minutes integer NOT NULL,
-  event_timestamp timestamp with time zone NOT NULL,
-  sent_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT notification_deliveries_pkey PRIMARY KEY (user_id, event_id, event_type, reminder_minutes),
-  CONSTRAINT notification_deliveries_user_id_users_moodle_user_id_fk FOREIGN KEY (user_id) REFERENCES public.users(moodle_user_id)
-);
-CREATE TABLE public.moodle_events (
-  user_id integer NOT NULL,
-  event_id integer NOT NULL,
+CREATE TABLE public.events (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  moodle_event_id integer UNIQUE,
   event_type character varying NOT NULL,
   title character varying NOT NULL,
-  timestart integer NOT NULL,
-  CONSTRAINT moodle_events_pkey PRIMARY KEY (user_id, event_id, event_type)
-);
-CREATE TABLE public.push_queue (
-  id integer NOT NULL DEFAULT nextval('push_queue_id_seq'::regclass),
-  user_id integer NOT NULL,
-  event_id integer NOT NULL,
-  event_type character varying NOT NULL,
-  title character varying NOT NULL,
-  reminder_minutes integer NOT NULL,
-  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT push_queue_pkey PRIMARY KEY (id)
+  deliver_time timestamp with time zone NOT NULL,
+  sent_reminders ARRAY DEFAULT '{}'::integer[],
+  created_at timestamp with time zone DEFAULT now(),
+  moodle_course_id integer,
+  event_details text,
+  CONSTRAINT events_pkey PRIMARY KEY (id)
 );

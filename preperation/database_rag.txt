@@ -1,0 +1,216 @@
+Q:"Bên cạnh việc tăng số lượng request lên, ta cũng cần giảm tải quá trình làm việc của AI xuống. Và điều đó nằm ở việc quét tài liệu của AI."
+A:"Tư duy của bạn hoàn toàn chính xác và mang tầm nhìn của một System Architect. Tối ưu hóa đầu vào (Input Tokens) thông qua việc "quét tài liệu" không chỉ giúp giảm chi phí, giảm tỷ lệ chạm ngưỡng Quota mà còn giúp AI phản hồi nhanh và ít bị "ảo giác" hơn.
+
+Để giảm tải triệt để quá trình AI quét và đọc tài liệu trong đường ống RAG, bạn cần áp dụng ngay 3 kỹ thuật tối ưu sau:
+
+**1. Lưu trữ Vector vĩnh viễn (Chuyển từ RAM sang pgvector)**
+
+* **Vấn đề hiện tại:** Hệ thống đang dùng `documentIndexCache` lưu trên RAM. Trong môi trường Serverless, mỗi khi máy chủ khởi động lại (cold start), toàn bộ cache này biến mất. Nếu có sinh viên hỏi, hệ thống lại phải gọi API của Gemini để đọc và Vector hóa (Embedding) lại toàn bộ file PDF từ đầu, cực kỳ lãng phí.
+
+
+* **Giải pháp:** Kích hoạt ngay extension `pgvector` trên Supabase (đã được bạn định hướng trong lộ trình 2.0). Khi giảng viên vừa upload bài giảng lên Moodle, hệ thống chỉ quét và chuyển thành Vector **đúng một lần duy nhất** rồi lưu vĩnh viễn vào ổ cứng của database. Khi 50 sinh viên vào hỏi, hệ thống chỉ việc query database chứ không bắt AI phải "đọc lại sách" thêm lần nào nữa.
+
+
+
+**2. Tối ưu hóa Prompt bằng Dynamic Top-K (Truy xuất động)**
+
+* **Vấn đề hiện tại:** Hàm `cosineSimilarity` đang mặc định lấy cố định Top 3 đến 5 đoạn văn (chunks) ghép vào Prompt. Nếu 1 đoạn chunk có 650 ký tự, 5 đoạn sẽ tốn hơn 3.200 ký tự cho mỗi lần hỏi, dù đôi khi câu trả lời chỉ nằm ở 1 đoạn duy nhất.
+
+
+* **Giải pháp:** Áp dụng ngưỡng cắt (Threshold). Chỉ đưa vào Prompt những đoạn chunk có điểm Cosine Similarity > 0.8.
+* Nếu sinh viên hỏi trúng phóc, chỉ 1 đoạn chunk thỏa mãn -> AI đọc rất ít, phản hồi trong chớp mắt.
+* Việc giảm bớt các chunk "có vẻ liên quan nhưng thực ra là rác" giúp AI không bị nhiễu thông tin (Lost in the middle).
+
+
+
+**3. Phân vùng tìm kiếm (Metadata Filtering)**
+
+* **Vấn đề:** Khi sinh viên hỏi *"Định lý này nghĩa là gì?"*, AI sẽ phải tìm kiếm vector đối chiếu trên toàn bộ 10 chương của môn học, gây tốn tài nguyên tính toán.
+* **Giải pháp:** Gắn thẻ siêu dữ liệu (Metadata) cho từng vector. Trên giao diện UI, nếu sinh viên đang mở tab của Chương 3 để học, hãy truyền ID của Chương 3 xuống API. Hàm tìm kiếm RAG sẽ chỉ "quét" các vector thuộc Chương 3, bỏ qua 9 chương còn lại. Tài nguyên tính toán giảm xuống 10 lần, tốc độ quét tăng vọt.
+
+Bằng cách đưa Vector xuống Database (`pgvector`) và thắt chặt đầu vào (Threshold + Metadata), AI của bạn giờ đây chỉ việc tập trung vào khâu "Suy luận và Trả lời", thay vì phải è cổ ra "Đọc và Tiêu hóa" lại tài liệu mỗi khi có người dùng mới."
+Q:"Rất hợp lí, vậy, tôi nên tạo thêm một bảng nữa cho pgvector ở Supabase sao?"
+A:"Chính xác! Đúng như định hướng nâng cấp ở phiên bản 2.0 mà bạn đã vạch ra trong tài liệu dự án, bạn cần tạo thêm một bảng chuyên dụng (ví dụ: `document_embeddings`) trên Supabase.
+
+Để tối ưu cho chiến thuật **Phân vùng tìm kiếm (Metadata Filtering)** và **Trích dẫn số trang**, dưới đây là cấu trúc SQL chuẩn xác nhất mà bạn có thể chạy trực tiếp trên SQL Editor của Supabase để khởi tạo:
+
+```sql
+-- 1. Kích hoạt extension pgvector (nếu chưa bật)
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- 2. Tạo bảng lưu trữ Vector Giáo trình
+CREATE TABLE document_embeddings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    moodle_course_id INT4 NOT NULL,           -- Dùng để phân vùng tìm kiếm (Metadata Filtering)
+    document_title VARCHAR(255) NOT NULL,     -- Tên file PDF/Slide (Dùng để AI làm trích dẫn)
+    page_number INT4,                         -- Số trang tài liệu (Dùng để AI làm trích dẫn)
+    chunk_text TEXT NOT NULL,                 -- Đoạn văn bản đã cắt (650 ký tự)
+    embedding VECTOR(768),                    -- Vector 768 chiều (Chuẩn của mô hình Gemini text-embedding-004)
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. Tạo chỉ mục HNSW để tốc độ truy vấn Cosine Similarity đạt mức mili-giây
+CREATE INDEX ON document_embeddings USING hnsw (embedding vector_cosine_ops);
+
+-- 4. Đánh chỉ mục cho B-Tree cho khóa ngoại để truy vấn lọc theo môn học nhanh hơn
+CREATE INDEX idx_doc_course_id ON document_embeddings(moodle_course_id);
+
+```
+
+**Cách bảng này hoạt động trong luồng thực tế:**
+
+1. **Lúc nạp dữ liệu (Chỉ 1 lần):** Giảng viên tải slide lên, hệ thống cắt chunk, gọi API Gemini lấy vector 768 chiều và lưu `INSERT` vào bảng này.
+2. **Lúc sinh viên hỏi bài (Hàng ngàn lần):** Bạn chỉ việc truyền câu hỏi đã vector hóa xuống Supabase với câu lệnh SQL cực kỳ đơn giản và nhẹ nhàng:
+
+```sql
+SELECT chunk_text, document_title, page_number 
+FROM document_embeddings 
+WHERE moodle_course_id = [ID_MÔN_HỌC_HIỆN_TẠI] -- Lọc bỏ 90% vector rác của môn khác
+ORDER BY embedding <=> [VECTOR_CÂU_HỎI]        -- Sắp xếp theo Cosine Similarity
+LIMIT 5;
+
+```
+
+Bảng này được thiết kế độc lập, không dính líu đến logic của `users` hay `fcm_tokens`, giúp cơ sở dữ liệu của bạn vô cùng gọn gàng và chuẩn mực theo đúng kiến trúc RAG hiện đại."
+Q:"Được rồi, tôi sẽ dùng bảng này để vector hoá tài liệu học tập ở LMS, trong khi tài liệu sinh viên tải lên dùng phương thức RAG truyền thống như trước đây. Nhưng còn một việc nữa:
+Khi mà tài liệu trên LMS bị xoá, phải có thứ gì đó xoá dữ liệu được vector hoá của tài liệu đó"
+A:"Bạn đã nhìn ra một vấn đề cực kỳ cốt lõi trong thiết kế hệ thống phân tán: **Quản lý vòng đời dữ liệu (Data Lifecycle Management) và Rác mồ côi (Orphaned Data).**
+
+Vì dự án LMS Assistant bám sát nguyên tắc không cài thêm plugin lạ vào Moodle để dễ dàng được nhà trường xét duyệt, Moodle sẽ không tự động chủ động "báo" (Webhook) cho hệ thống của bạn khi một giảng viên xóa tệp. Do đó, bạn cần áp dụng cơ chế **Garbage Collection (Thu gom rác tự động)** dựa trên thuật toán đối chiếu (Diffing).
+
+Dưới đây là phương án xử lý triệt để:
+
+**1. Cập nhật thêm trường ID vào bảng `document_embeddings**`
+Để hệ thống biết chính xác vector nào thuộc về tệp nào, bạn cần bổ sung thêm một cột `moodle_file_id` (hoặc `module_id`) vào cấu trúc bảng trên Supabase.
+
+```sql
+ALTER TABLE document_embeddings 
+ADD COLUMN moodle_file_id INT4 NOT NULL;
+
+-- Tạo chỉ mục để lệnh xóa rác diễn ra cực nhanh
+CREATE INDEX idx_doc_file_id ON document_embeddings(moodle_file_id);
+
+```
+
+**2. Thuật toán "Đồng bộ & Dọn rác" (Sync & Sweep)**
+Bạn sẽ tích hợp logic dọn rác này trực tiếp vào luồng gọi API `core_course_get_contents` hiện có của dự án. Mỗi khi sinh viên mở không gian môn học, hoặc khi hệ thống chạy tiến trình quét tài liệu, thuật toán sẽ thực thi theo 3 bước sau:
+
+* **Bước 1: Lấy danh sách gốc (Source of Truth).** Gọi hàm API `core_course_get_contents` để lấy danh sách toàn bộ các tài liệu *đang tồn tại* trên Moodle ở thời điểm hiện tại. Trích xuất ra một mảng các ID hợp lệ, ví dụ: `active_file_ids = [101, 102, 105]`.
+
+
+* **Bước 2: Quét rác (Sweep).** Gửi một lệnh DELETE duy nhất xuống Supabase để dọn sạch toàn bộ các vector của tệp đã bị xóa (các file ID có trong Supabase nhưng không còn nằm trong mảng `active_file_ids`).
+```typescript
+// Mã giả minh họa logic Drizzle ORM
+await db.delete(document_embeddings)
+  .where(
+    and(
+      eq(document_embeddings.moodle_course_id, currentCourseId),
+      notInArray(document_embeddings.moodle_file_id, active_file_ids)
+    )
+  );
+
+```
+
+
+* **Bước 3: Nạp tệp mới.** Hệ thống đối chiếu xem trong `active_file_ids` có tệp nào chưa từng được lưu trong `document_embeddings` không. Nếu có tệp mới, lúc này mới gọi Gemini để bóc tách, băm nhỏ (chunking) và vector hóa.
+
+
+
+**Ưu điểm của cơ chế này:**
+
+* **Tự động hoàn toàn (Self-healing):** Hệ thống luôn tự sửa chữa và đồng bộ trạng thái sao cho khớp chính xác 100% với Moodle mỗi khi có lượt truy cập.
+* **Tiết kiệm dung lượng và chi phí API:** Những file cũ bị giảng viên xóa đi sẽ lập tức được giải phóng khỏi Supabase, trả lại không gian cho các tài liệu mới mà không cần thao tác thủ công. Đồng thời, AI không bao giờ bị dính "ảo giác" từ một tài liệu đã lỗi thời không còn tồn tại trên hệ thống gốc."
+Q:"Như vậy, ta sẽ dùng cron_job để xoá nó tương tự như ta dùng nó để chạy thông báo"
+A:"Chính xác. Tư duy đẩy các tác vụ dọn dẹp sang chạy ngầm (Background Jobs) bằng Cron Job, tương tự như cách bạn đang xử lý hàng đợi thông báo đẩy, là một bước đi rất chuẩn xác về mặt kiến trúc phần mềm.
+
+Việc dùng Cron Job mang lại lợi thế tuyệt đối về trải nghiệm người dùng: Sinh viên khi mở ứng dụng sẽ không phải chờ hệ thống khựng lại vài giây để thực hiện vòng lặp kiểm tra và xóa rác. Mọi thứ diễn ra âm thầm ở backend.
+
+Tuy nhiên, khi áp dụng Cron Job để cào dữ liệu từ Moodle, bạn cần lưu ý giải quyết **2 bài toán kỹ thuật** sau:
+
+* **Bài toán Xác thực (Token):** Cron Job chạy độc lập trên máy chủ, không gắn với phiên đăng nhập (session) của bất kỳ ai. Để gọi được hàm `core_course_get_contents` của Moodle, tiến trình chạy ngầm này sẽ phải trích xuất các Moodle Token đang còn hạn từ bảng `moodle_credentials` mà bạn đã thiết kế.
+* **Bài toán Chống dội bom API (API Storm):** Nếu trường có hàng trăm khóa học, việc Cron Job gọi API Moodle quét toàn bộ các khóa học cùng một lúc có thể làm sập máy chủ Moodle của trường (hoặc bị Moodle chặn IP do rate limit). Bạn cần thiết kế Cron Job chạy theo lô (Batch Processing) – ví dụ: mỗi 15 phút chỉ quét đối soát rác cho 50 khóa học.
+
+**Khuyến nghị về Chiến lược lai (Hybrid Approach):**
+
+Để hệ thống vừa nhẹ vừa chính xác theo thời gian thực, các kiến trúc sư thường kết hợp cả hai phương pháp:
+
+1. **Lazy Evaluation (Kiểm tra lười biếng - Tại Client):** Khi một sinh viên bất kỳ bấm mở một môn học, hệ thống mới gọi API lấy danh sách file hiện tại và đối chiếu nhẹ. Nếu phát hiện rác, xóa ngay. Cách này dùng luôn Token của sinh viên đó, cập nhật tức thì (Real-time) và không tạo áp lực thừa cho server.
+2. **Cron Job (Quét sâu - Tại Server):** Thiết lập một cron trigger trên Supabase chạy vào 2 giờ sáng mỗi ngày. Tiến trình này đóng vai trò như một người lao công (Garbage Collector) đi rà soát lại toàn bộ bảng `document_embeddings`, dọn dẹp những vector mồ côi của các môn học đã đóng hoặc ít người truy cập mà cách 1 chưa chạm tới.
+
+Với cách tiếp cận này, bạn vừa giữ được tốc độ phản hồi tức thì của RAG, vừa đảm bảo Database luôn sạch sẽ mà không vắt kiệt tài nguyên của Moodle LMS."
+Q:"Vậy, cách sử dụng Vector RAG trong Supabase so với cách hiện tại tôi đang dùng được gọi là gì?"
+A:"Trong thiết kế hệ thống phần mềm, sự khác biệt giữa hai phương pháp này nằm ở **cơ chế lưu trữ (Storage Mechanism)** và **vòng đời dữ liệu (Data Lifecycle)**. Dưới góc độ chuyên ngành, hai cách này được gọi bằng các thuật ngữ sau:
+
+**1. Cách hiện tại bạn đang dùng: In-Memory Vector Search (Tìm kiếm Vector trên bộ nhớ đệm) hay Ephemeral RAG (RAG tạm thời)**
+
+* Trong tài liệu của bạn, nó được định nghĩa chính xác là **"In-memory LRU Cache cho Vector Index"** hoặc một phần của **"Local RAG Pipeline"**.
+
+
+* **Đặc điểm:** Toàn bộ vector được tính toán và nhồi vào bộ nhớ RAM của máy chủ (Node.js/Edge Worker).
+* **Bản chất:** Nó là **Stateless RAG** (Phi trạng thái lâu dài). Tốc độ query cực kỳ nhanh vì đọc trực tiếp từ RAM, nhưng dữ liệu rất "mong manh", sẽ bốc hơi hoàn toàn khi máy chủ khởi động lại (Cold Start) hoặc khi bộ đệm LRU bị đầy phải đẩy dữ liệu cũ ra.
+
+
+
+**2. Cách chuyển sang Supabase (`pgvector`): Persistent Vector Database (CSDL Vector lưu trữ vĩnh viễn) hay Database-backed RAG**
+
+* Thường được gọi tắt theo tên công nghệ là **`pgvector` RAG**.
+
+
+* **Đặc điểm:** Các chuỗi vector được lưu vật lý (Disk-backed) vào các hàng của bảng dữ liệu PostgreSQL và được đánh chỉ mục bằng các thuật toán không gian (như HNSW hoặc IVFFlat).
+
+
+* **Bản chất:** Nó là **Stateful RAG** (Có trạng thái). Tri thức sau khi được băm nhỏ (chunking) và vector hóa sẽ trở thành một phần tài sản vĩnh viễn của cơ sở dữ liệu. Nó không bị mất đi khi server sập, hỗ trợ tìm kiếm trên hàng triệu bản ghi (Scale-up) và có thể dễ dàng phân vùng tìm kiếm (Metadata Filtering) bằng các câu lệnh SQL truyền thống.
+
+
+
+**Tóm lại:**
+Hành động nâng cấp của bạn được gọi là bước chuyển dịch kiến trúc từ **In-Memory Cache (Bộ đệm tạm thời)** sang **Persistent VectorDB (Cơ sở dữ liệu Vector vĩnh viễn)**. Đây là một bước tiến bắt buộc (Best Practice) của mọi hệ thống AI tạo sinh khi muốn thoát khỏi giai đoạn làm bản nháp (PoC/MVP) để tiến lên phiên bản chạy thực tế (Production-ready)."
+Q:"Ưu, nhược điểm của chúng và việc kết hợp chúng có lợi gì"
+A:"**1. Phương pháp 1: In-Memory Vector Search (Lưu trữ Vector trên RAM)**
+
+* **Ưu điểm:**
+* **Tốc độ truy xuất cực nhanh (Ultra-low latency):** Do dữ liệu nằm sẵn trong bộ nhớ RAM (In-memory) của máy chủ Node.js/Edge Worker, việc tính toán khoảng cách Cosine diễn ra gần như ngay lập tức mà không có độ trễ truyền tải mạng (Network I/O) hay truy xuất ổ cứng.
+* **Dễ triển khai ban đầu:** Không cần thiết lập hạ tầng cơ sở dữ liệu phức tạp, rất phù hợp cho giai đoạn thử nghiệm (MVP) hoặc chạy cục bộ (Local).
+
+
+* **Nhược điểm:**
+* **Dữ liệu "bay hơi" (Volatile):** Nếu hệ thống triển khai trên các instance serverless hoặc khi máy chủ khởi động lại, toàn bộ cache trên RAM sẽ biến mất.
+
+
+* **Tốn kém chi phí API & Độ trễ tái nạp:** Khi cache bị mất, hệ thống buộc phải gọi lại API của các nhà cung cấp (như Gemini) để tính toán lại vector embedding từ đầu cho cùng một tài liệu, gây tốn kém chi phí và làm tăng độ trễ.
+
+
+* **Giới hạn dung lượng vật lý:** Phụ thuộc hoàn toàn vào RAM của server. Hệ thống hiện tại phải duy trì bộ đệm `documentIndexCache` và liên tục giải phóng tài liệu cũ (giới hạn 50 tài liệu) để tránh tình trạng tràn bộ nhớ RAM.
+
+
+* **Không thể đồng bộ giữa nhiều Server (Khó Scale ngang):** Nếu bạn chạy 5 máy chủ cùng lúc để gánh tải, mỗi máy chủ lại sở hữu một bộ nhớ RAM riêng biệt, dẫn đến sự bất đồng bộ về dữ liệu vector.
+
+
+
+**2. Phương pháp 2: Persistent Vector Database (Sử dụng Supabase `pgvector`)**
+
+* **Ưu điểm:**
+* **Lưu trữ vĩnh viễn (Stateful):** Tri thức sau khi được vector hóa sẽ được lưu vĩnh viễn vào ổ cứng cơ sở dữ liệu PostgreSQL. Dữ liệu tồn tại an toàn kể cả khi toàn bộ máy chủ ứng dụng khởi động lại.
+
+
+* **Tối ưu chi phí API 100%:** Mỗi tài liệu (PDF, PPTX) chỉ cần đi qua API Embedding đúng một lần duy nhất lúc được giảng viên tải lên. Khi sinh viên hỏi bài, hệ thống chỉ tốn công truy vấn Database chứ không tốn thêm đồng phí API Embedding nào.
+* **Khả năng phân vùng & Lọc siêu dữ liệu (Metadata Filtering):** Dễ dàng sử dụng ngôn ngữ SQL kết hợp với các trường như `moodle_course_id` để thu hẹp phạm vi tìm kiếm, giúp kết quả chính xác hơn và bỏ qua các vector rác.
+
+
+* **Nhược điểm:**
+* **Độ trễ mạng (Network Latency):** So với việc đọc trực tiếp từ RAM, việc gửi câu lệnh SQL từ máy chủ ứng dụng xuống máy chủ Database (Supabase) sẽ mất thêm một khoảng thời gian nhỏ (thường từ vài chục đến khoảng 100 mili-giây).
+* **Cần bảo trì dữ liệu:** Phải xây dựng thêm các tiến trình dọn rác (Garbage Collection) hoặc Cron Job để xóa các vector mồ côi khi tài liệu gốc bị xóa khỏi Moodle, nếu không Database sẽ phình to.
+
+
+
+**3. Lợi ích khi kết hợp cả hai (Kiến trúc Hybrid Vector Cache)**
+
+Trong các hệ thống phân tán quy mô lớn, các kỹ sư thường không chọn một trong hai, mà **kết hợp chúng lại** để bù trừ khuyết điểm cho nhau theo mô hình: **Supabase `pgvector` làm "Kho chứa chính" (Source of Truth) + RAM làm "Bộ nhớ đệm" (Hot Cache).**
+
+* **Tăng tốc độ, giảm độ trễ:** Khi sinh viên mở một môn học, hệ thống kéo tập vector của môn đó từ `pgvector` lên RAM và giữ ở đó. Các câu hỏi liên tiếp của sinh viên sẽ được đối chiếu ngay trên RAM với tốc độ chớp nhoáng.
+* **Chống sập Database (Giảm tải Read):** Việc tận dụng RAM để đỡ các truy vấn lặp đi lặp lại giúp Supabase không bị "dội bom" bởi hàng ngàn câu lệnh `SELECT` cùng lúc khi cả lớp 50 người cùng chat, giữ cho kết nối Database luôn ổn định.
+* **An toàn dữ liệu & Cắt giảm chi phí:** Nếu RAM bị đầy và xóa bớt vector, hoặc server bị sập, hệ thống không cần gọi lại API của Gemini để tốn tiền tính toán lại. Nó chỉ cần một lệnh SQL nhẹ nhàng để nạp lại vector có sẵn từ ổ cứng Supabase lên RAM.
+
+
+
+Việc ứng dụng kiến trúc Hybrid này sẽ giúp hệ thống LMS Assistant của bạn đạt được sự cân bằng hoàn hảo: Tốc độ phản hồi cực nhanh như ứng dụng cục bộ, nhưng khả năng chịu tải và độ bền bỉ dữ liệu lại vững chắc như một nền tảng doanh nghiệp."

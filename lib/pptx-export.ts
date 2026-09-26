@@ -88,7 +88,7 @@ export async function exportSlidesToPptx(
 
     if (!isTitleSlide) {
       const bulletText = (slideData.bullets || []).map(text => ({
-        text,
+        text: text.replace(/\*\*/g, ''),
         options: { bullet: { indent: 18 }, hanging: 4 },
       }));
 
@@ -112,7 +112,7 @@ export async function exportSlidesToPptx(
       if (slideData.keyTakeaway) {
         slide.addText([
           { text: 'Điểm cốt lõi: ', options: { bold: true, color: 'A594FD' } },
-          { text: slideData.keyTakeaway, options: { italic: true, color: 'CBD5E1' } },
+          { text: slideData.keyTakeaway.replace(/\*\*/g, ''), options: { italic: true, color: 'CBD5E1' } },
         ], {
           x: 0.8,
           y: 5.75,
@@ -777,6 +777,16 @@ export function exportSlidesToHtml(deck: SlideDeckData, courseTitle: string): vo
   const slides = ${JSON.stringify(slides)};
   let currentIndex = 0;
 
+  function formatInlineMarkdown(text) {
+    if (!text) return '';
+    var esc = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return esc
+      .replace(/\\*\\*\\*([^*]+?)\\*\\*\\*/g, '<strong style="font-weight: 600; font-style: italic; color: #ffffff;">$1</strong>')
+      .replace(/\\*\\*([^*]+?)\\*\\*/g, '<strong style="font-weight: 600; color: #ffffff;">$1</strong>')
+      .replace(new RegExp('\\\\x60([^\\\\x60]+?)\\\\x60', 'g'), '<code style="background: rgba(255,255,255,0.1); padding: 1px 5px; border-radius: 4px; font-family: monospace;">$1</code>')
+      .replace(/\\*([^*]+?)\\*/g, '<em>$1</em>');
+  }
+
   function renderSlide() {
     if (!slides || slides.length === 0) return;
     const slide = slides[currentIndex];
@@ -784,7 +794,7 @@ export function exportSlidesToHtml(deck: SlideDeckData, courseTitle: string): vo
     
     const subEl = document.getElementById('slideSubtitle');
     if (slide.subtitle) {
-      subEl.textContent = slide.subtitle;
+      subEl.innerHTML = formatInlineMarkdown(slide.subtitle);
       subEl.style.display = 'block';
     } else {
       subEl.style.display = 'none';
@@ -794,20 +804,20 @@ export function exportSlidesToHtml(deck: SlideDeckData, courseTitle: string): vo
     bulletsList.innerHTML = '';
     (slide.bullets || []).forEach(bullet => {
       const li = document.createElement('li');
-      li.textContent = bullet;
+      li.innerHTML = formatInlineMarkdown(bullet);
       bulletsList.appendChild(li);
     });
 
     const takeawayEl = document.getElementById('slideTakeaway');
     if (slide.keyTakeaway) {
-      takeawayEl.textContent = '💡 ' + slide.keyTakeaway;
+      takeawayEl.innerHTML = '<strong>Điểm cốt lõi:</strong> ' + formatInlineMarkdown(slide.keyTakeaway);
       takeawayEl.style.display = 'block';
     } else {
       takeawayEl.style.display = 'none';
     }
 
     const notesEl = document.getElementById('notesContent');
-    notesEl.textContent = slide.notes || 'Không có ghi chú cho slide này.';
+    notesEl.innerHTML = formatInlineMarkdown(slide.notes || 'Không có ghi chú cho slide này.').replace(/\n/g, '<br/>');
 
     const pageStr = (currentIndex + 1) + ' / ' + slides.length;
     document.getElementById('slideIndexBadge').textContent = pageStr;

@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Check, Search, X, BookOpen, GraduationCap } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ChevronDown, Check, Search, X, BookOpen, GraduationCap, Home, LayoutGrid } from 'lucide-react';
 import type { Course } from '@/app/types';
 
 interface CourseSwitcherProps {
@@ -20,6 +21,7 @@ export function CourseSwitcher({
   subtitle,
   className = '',
 }: CourseSwitcherProps) {
+  const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isMobile, setIsMobile] = useState(false);
@@ -278,6 +280,71 @@ export function CourseSwitcher({
                   );
                 })
               )}
+            </div>
+
+            {/* Switcher Footer */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '10px 14px',
+                borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                background: 'rgba(255, 255, 255, 0.02)',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOpen(false);
+                  router.push('/home');
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#94a3b8',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '4px 8px',
+                  borderRadius: '6px',
+                  transition: 'color 0.2s',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
+                onMouseLeave={e => (e.currentTarget.style.color = '#94a3b8')}
+              >
+                <Home size={13} />
+                <span>Về trang chủ</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOpen(false);
+                  router.push('/courses');
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#818cf8',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '4px 8px',
+                  borderRadius: '6px',
+                  transition: 'color 0.2s',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.color = '#a5b4fc')}
+                onMouseLeave={e => (e.currentTarget.style.color = '#818cf8')}
+              >
+                <LayoutGrid size={13} />
+                <span>Tất cả khóa học</span>
+              </button>
             </div>
           </div>
         </div>,
