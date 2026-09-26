@@ -5,6 +5,8 @@ import { getDb } from '../../../db';
 import { users } from '../../../db/schema';
 import { eq } from 'drizzle-orm';
 
+export const dynamic = 'force-dynamic';
+
 type MoodleTokenResponse = {
   token?: string;
   error?: string;
@@ -26,66 +28,75 @@ type LoginBody = {
 };
 
 export async function POST(request: Request) {
-  let body: LoginBody;
-
   try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Dữ liệu đăng nhập không hợp lệ.' }, { status: 400 });
-  }
+    let body: LoginBody;
 
-  const identifier = typeof body.email === 'string' ? body.email : body.username;
-  if (
-    typeof identifier !== 'string' ||
-    typeof body.password !== 'string' ||
-    !identifier.trim() ||
-    !body.password
-  ) {
-    return NextResponse.json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu.' }, { status: 400 });
-  }
-
-  const { MOODLE_URL } = runtimeEnv();
-  if (!MOODLE_URL) {
-    return NextResponse.json({ error: 'Chưa cấu hình địa chỉ Moodle.' }, { status: 503 });
-  }
-
-  const moodleBaseUrl = MOODLE_URL.replace(/\/$/, '');
-  const tokenParams = new URLSearchParams({
-    username: identifier.trim(),
-    password: body.password,
-    service: 'moodle_mobile_app',
-  });
-
-  try {
-    const tokenResponse = await fetch(
-      `${moodleBaseUrl}/login/token.php?${tokenParams.toString()}`,
-      { method: 'POST', headers: { Accept: 'application/json' } },
-    );
-
-    if (!tokenResponse.ok) {
-      return NextResponse.json({ error: 'Mất kết nối tới hệ thống Moodle.' }, { status: 502 });
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Dữ liệu đăng nhập không hợp lệ.' }, { status: 400 });
     }
 
-    const tokenData = (await tokenResponse.json()) as MoodleTokenResponse;
+    const identifier = typeof body.email === 'string' ? body.email : body.username;
+    if (
+      typeof identifier !== 'string' ||
+      typeof body.password !== 'string' ||
+      !identifier.trim() ||
+      !body.password
+    ) {
+      return NextResponse.json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu.' }, { status: 400 });
+    }
+
+    const { MOODLE_URL } = runtimeEnv();
+    const effectiveMoodleUrl = MOODLE_URL || 'https://moodletvk.duckdns.org';
+
+    const moodleBaseUrl = effectiveMoodleUrl.replace(/\/$/, '');
+    const tokenParams = new URLSearchParams({
+      username: identifier.trim(),
+      password: body.password,
+      service: 'moodle_mobile_app',
+    });
+
+    let tokenData: MoodleTokenResponse;
+    try {
+      const tokenResponse = await fetch(
+        `${moodleBaseUrl}/login/token.php?${tokenParams.toString()}`,
+        { method: 'POST', headers: { Accept: 'application/json' } },
+      );
+
+      if (!tokenResponse.ok) {
+        return NextResponse.json({ error: 'Mất kết nối tới hệ thống Moodle.' }, { status: 502 });
+      }
+
+      tokenData = (await tokenResponse.json()) as MoodleTokenResponse;
+    } catch (moodleErr) {
+      console.warn('Moodle token fetch failed:', moodleErr);
+      return NextResponse.json({ error: 'Không thể kết nối đến máy chủ Moodle.' }, { status: 502 });
+    }
+
     if (!tokenData.token || tokenData.error) {
       return NextResponse.json({ error: 'Thông tin đăng nhập không hợp lệ.' }, { status: 401 });
     }
 
-    const profileParams = new URLSearchParams({
-      wstoken: tokenData.token,
-      wsfunction: 'core_webservice_get_site_info',
-      moodlewsrestformat: 'json',
-    });
-    const profileResponse = await fetch(
-      `${moodleBaseUrl}/webservice/rest/server.php?${profileParams.toString()}`,
-      { method: 'POST', headers: { Accept: 'application/json' } },
-    );
+    let profileData: MoodleProfileResponse = {};
+    try {
+      const profileParams = new URLSearchParams({
+        wstoken: tokenData.token,
+        wsfunction: 'core_webservice_get_site_info',
+        moodlewsrestformat: 'json',
+      });
+      const profileResponse = await fetch(
+        `${moodleBaseUrl}/webservice/rest/server.php?${profileParams.toString()}`,
+        { method: 'POST', headers: { Accept: 'application/json' } },
+      );
 
-    if (!profileResponse.ok) {
-      return NextResponse.json({ error: 'Không thể đọc thông tin tài khoản Moodle.' }, { status: 502 });
+      if (profileResponse.ok) {
+        profileData = (await profileResponse.json()) as MoodleProfileResponse;
+      }
+    } catch (profErr) {
+      console.warn('Moodle site info fetch warning:', profErr);
     }
 
-    const profileData = (await profileResponse.json()) as MoodleProfileResponse;
     const userId = Number(profileData.userid) || 4;
     const fullname = profileData.fullname ?? '';
     const username = profileData.username ?? identifier.trim();
@@ -93,7 +104,7 @@ export async function POST(request: Request) {
     // Determine user role: user ID 2 (Admin User), site admin, or teacher
     let userRole = (userId === 2 || Boolean(profileData.userissiteadmin)) ? 'teacher' : 'student';
 
-    // Sync user to users table
+    // Sync user to users table via Supabase if configured
     if (supabaseAdmin) {
       try {
         const { data: existingUser } = await supabaseAdmin
@@ -119,9 +130,10 @@ export async function POST(request: Request) {
       }
     }
 
-    const db = getDb();
-    if (db) {
-      try {
+    // Sync user to users table via Drizzle if configured
+    try {
+      const db = getDb();
+      if (db) {
         const existing = await db.select().from(users).where(eq(users.moodleUserId, userId)).limit(1);
         if (existing.length === 0) {
           await db.insert(users).values({
@@ -132,9 +144,9 @@ export async function POST(request: Request) {
         } else if (existing[0].role !== userRole && userRole === 'teacher') {
           await db.update(users).set({ role: userRole }).where(eq(users.moodleUserId, userId));
         }
-      } catch (dbErr) {
-        console.warn('Drizzle login sync warning:', dbErr);
       }
+    } catch (dbErr) {
+      console.warn('Drizzle login sync warning:', dbErr);
     }
 
     return NextResponse.json({
@@ -148,7 +160,9 @@ export async function POST(request: Request) {
         avatarUrl: `/api/moodle/avatar?token=${encodeURIComponent(tokenData.token)}&id=${userId}`,
       },
     });
-  } catch {
-    return NextResponse.json({ error: 'Mất kết nối tới hệ thống Moodle.' }, { status: 502 });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Lỗi hệ thống';
+    console.error('Unhandled login error:', err);
+    return NextResponse.json({ error: `Lỗi xử lý đăng nhập: ${errorMsg}` }, { status: 500 });
   }
 }

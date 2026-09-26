@@ -43,3 +43,4 @@ next-env.d.ts
 
 # local scratch/temp scripts
 /scratch/
+*.bak
