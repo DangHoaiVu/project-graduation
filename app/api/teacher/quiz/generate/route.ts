@@ -21,6 +21,7 @@ export async function POST(request: Request) {
       difficulty?: 'easy' | 'normal' | 'hard';
       questionType?: 'multiple_choice' | 'true_false' | 'multiple_select' | 'matching' | 'short_answer' | 'mixed';
       questionTypes?: Array<'multiple_choice' | 'true_false' | 'multiple_select' | 'matching' | 'short_answer'>;
+      allowExternalSource?: boolean;
       model?: string;
     };
 
@@ -51,6 +52,7 @@ export async function POST(request: Request) {
     const difficulty = body.difficulty || 'normal';
     const questionType = body.questionType || (selectedTypes.length === 1 ? selectedTypes[0] : 'mixed');
     const topic = body.topic || 'Kiểm tra kiến thức môn học';
+    const allowExternalSource = Boolean(body.allowExternalSource);
 
     const rawDocs: Array<{ title: string; text: string }> = [];
 
@@ -181,6 +183,13 @@ export async function POST(request: Request) {
       typeGuide = `LOẠI CÂU HỎI: HÃY PHÂN BỔ ĐỀU VÀ XEN KẼ CHÍNH XÁC GIỮA ${selectedTypes.length} ĐỊNH DẠNG ĐƯỢC CHỌN SAU ĐÂY:\n${selectedTypes.map(t => typeDescriptions[t]).join('\n')}\nLƯU Ý QUAN TRỌNG: TUYỆT ĐỐI CHỈ TẠO CÂU HỎI THUỘC CÁC ĐỊNH DẠNG ĐÃ CHỌN TRÊN, KHÔNG TẠO DẠNG NGOÀI DANH SÁCH!`;
     }
 
+    const externalInstruction = allowExternalSource
+      ? `CHẾ ĐỘ NGUỒN NGOÀI & MỞ RỘNG THỰC TIỄN (EXTERNAL SOURCES ALLOWED - BẬT):
+- Bạn ĐƯỢC PHÉP và ĐƯỢC KHUYẾN KHÍCH sử dụng tri thức mở rộng, liên hệ kiến thức thực tế ngành nghề, cập nhật các framework/thư viện/công nghệ hiện đại và mở rộng tư duy chuyên môn ra ngoài tài liệu bài giảng.
+- Nếu tài liệu không đề cập hoặc chỉ đề cập sơ lược về chủ đề "${topic}", hãy tự do vận dụng toàn bộ kiến thức chuyên sâu của bạn về "${topic}" để soạn bộ câu hỏi chính xác 100%, bám sát thực tiễn lập trình/ngành nghề.`
+      : `CHẾ ĐỘ BÁM SÁT TÀI LIỆU NGHIÊM NGẶT (STRICT GROUNDING - TẮT):
+- Bộ câu hỏi BẮT BUỘC PHẢI BÁM SÁT TUYỆT ĐỐI nội dung tài liệu môn học và ghi chú được cung cấp dưới đây. Tuyệt đối không tự suy diễn kiến thức ngoài giáo trình.`;
+
     const contextSection = context
       ? `TÀI LIỆU NGUỒN CỦA MÔN HỌC:\n${context.slice(0, 20000)}\n\n`
       : `MÔN HỌC: ${body.course || 'Khóa học đại học'}\nCHỦ ĐỀ: ${topic}\n\n`;
@@ -193,6 +202,7 @@ BẮT BUỘC trả về đúng cấu trúc JSON, không markdown hay văn bản 
 Hãy tạo CHÍNH XÁC ${count} câu hỏi trắc nghiệm (tuyệt đối không nhiều hơn và không ít hơn, đúng ${count} câu) theo chủ đề: "${topic}".
 ${difficultyGuide}
 ${typeGuide}
+${externalInstruction}
 
 QUY TẮC BẮT BUỘC CHO TỪNG LOẠI CÂU HỎI:
 1. Đối với "type": "multichoice" (1 đáp án đúng): "options" có 4 phương án, "correctAnswerIndex": số nguyên 0..3.
@@ -252,6 +262,7 @@ CẤU TRÚC JSON BẮT BUỘC:
       userPrompt,
       temperature: 0.2,
       jsonMode: true,
+      googleSearchGrounding: allowExternalSource,
     });
 
     if (!result.text) {

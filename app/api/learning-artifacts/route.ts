@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
-import { saveLearningArtifact, getLearningArtifacts } from '@/lib/learning-artifacts';
+import { saveLearningArtifact, getLearningArtifacts, deleteLearningArtifact, updateLearningArtifact } from '@/lib/learning-artifacts';
 import { supabaseAdmin } from '@/lib/supabase';
 import { getDb } from '@/db';
 import { learningArtifacts } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { deleteFirebaseRow } from '@/lib/firebase-admin';
 
 export async function GET(request: Request) {
   try {
@@ -81,56 +80,50 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
-    const userId = Number(searchParams.get('userId'));
-    const artifactType = searchParams.get('artifactType');
+    const id = searchParams.get('id') || undefined;
+    const attemptIdStr = searchParams.get('attemptId');
+    const attemptId = attemptIdStr ? Number(attemptIdStr) : undefined;
+    const userId = Number(searchParams.get('userId')) || undefined;
+    const artifactType = searchParams.get('artifactType') || undefined;
 
-    if (!id) {
-      return NextResponse.json({ error: 'Mã thành quả (id) là bắt buộc.' }, { status: 400 });
+    if (!id && !attemptId) {
+      return NextResponse.json({ error: 'Mã thành quả (id) hoặc mã lượt thi (attemptId) là bắt buộc.' }, { status: 400 });
     }
 
-    if (artifactType === 'quiz_analysis' && !userId) {
-      return NextResponse.json({ error: 'userId là bắt buộc khi xóa phân tích bài thi.' }, { status: 400 });
-    }
-
-    try {
-      const deleted = await deleteFirebaseRow('learning_artifacts', id);
-      if (deleted) return NextResponse.json({ success: true, message: 'Đã xóa thành quả học tập.' });
-    } catch (firebaseError) {
-      console.warn('Firebase delete learning_artifacts error:', firebaseError);
-    }
-
-    if (supabaseAdmin) {
-      try {
-        let query = supabaseAdmin.from('learning_artifacts').delete().eq('id', id);
-        if (userId) query = query.eq('user_id', userId);
-        if (artifactType) query = query.eq('artifact_type', artifactType);
-        const { error } = await query;
-        if (error) throw error;
-        return NextResponse.json({ success: true, message: 'Đã xóa thành quả học tập.' });
-      } catch (sbErr) {
-        console.warn('Supabase delete learning_artifacts error:', sbErr);
-      }
-    }
-
-    const db = getDb();
-    if (db) {
-      try {
-        const conditions = [eq(learningArtifacts.id, id)];
-        if (userId) conditions.push(eq(learningArtifacts.userId, userId));
-        if (artifactType) conditions.push(eq(learningArtifacts.artifactType, artifactType));
-        await db.delete(learningArtifacts).where(and(...conditions));
-        return NextResponse.json({ success: true, message: 'Đã xóa thành quả học tập.' });
-      } catch (dbErr) {
-        console.warn('Drizzle delete learning_artifacts error:', dbErr);
-      }
-    }
-
-    return NextResponse.json({ success: true, mode: 'preview' });
+    const success = await deleteLearningArtifact({ id, attemptId, userId, artifactType });
+    return NextResponse.json({ success: true, message: 'Đã xóa bản phân tích bài thi.' });
   } catch (error) {
     console.error('Error deleting learning artifact:', error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Lỗi xóa thành quả học tập.' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    if (!id) {
+      return NextResponse.json({ error: 'Mã thành quả (id) là bắt buộc.' }, { status: 400 });
+    }
+
+    const body = (await request.json()) as {
+      name?: string;
+      orientation?: 'horizontal' | 'vertical';
+      contentData?: Record<string, unknown>;
+    };
+
+    const updated = await updateLearningArtifact(id, body);
+    return NextResponse.json({
+      success: true,
+      artifact: updated,
+    });
+  } catch (error) {
+    console.error('Error updating learning artifact:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Lỗi cập nhật học liệu.' },
       { status: 500 }
     );
   }

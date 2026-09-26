@@ -12,7 +12,10 @@ export type AppRuntime = {
   CLOUDINARY_API_SECRET?: string;
   CLOUDINARY_URL?: string;
   GROQ_API_KEY?: string;
+  COHERE_API_KEY?: string;
+  AI_HORDE_API_KEY?: string;
   GEMINI_API_KEY?: string;
+  GEMINI_API_KEYS?: string;
   GOOGLE_API_KEY?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
@@ -20,6 +23,11 @@ export type AppRuntime = {
   MOODLE_TOKEN?: string;
   MOODLE_TOKEN_ENCRYPTION_KEY?: string;
   CRON_SECRET?: string;
+  MOODLE_DB_HOST?: string;
+  MOODLE_DB_PORT?: string;
+  MOODLE_DB_USER?: string;
+  MOODLE_DB_PASSWORD?: string;
+  MOODLE_DB_NAME?: string;
 };
 
 function readLocalEnvFiles(): Record<string, string> {
@@ -92,6 +100,7 @@ export function runtimeEnv(): AppRuntime {
     CLOUDINARY_URL: getVar('CLOUDINARY_URL'),
     GROQ_API_KEY: getVar('GROQ_API_KEY'),
     GEMINI_API_KEY: getVar('GEMINI_API_KEY'),
+    GEMINI_API_KEYS: getVar('GEMINI_API_KEYS'),
     GOOGLE_API_KEY: getVar('GOOGLE_API_KEY'),
     OPENAI_API_KEY: getVar('OPENAI_API_KEY'),
     ANTHROPIC_API_KEY: getVar('ANTHROPIC_API_KEY'),
@@ -99,6 +108,11 @@ export function runtimeEnv(): AppRuntime {
     MOODLE_TOKEN: getVar('MOODLE_TOKEN'),
     MOODLE_TOKEN_ENCRYPTION_KEY: getVar('MOODLE_TOKEN_ENCRYPTION_KEY'),
     CRON_SECRET: getVar('CRON_SECRET'),
+    MOODLE_DB_HOST: getVar('MOODLE_DB_HOST') || '127.0.0.1',
+    MOODLE_DB_PORT: getVar('MOODLE_DB_PORT') || '3306',
+    MOODLE_DB_USER: getVar('MOODLE_DB_USER') || 'root',
+    MOODLE_DB_PASSWORD: getVar('MOODLE_DB_PASSWORD') || '',
+    MOODLE_DB_NAME: getVar('MOODLE_DB_NAME') || 'moodle',
   };
 }
 

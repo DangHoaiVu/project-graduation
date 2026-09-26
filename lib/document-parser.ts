@@ -1,4 +1,77 @@
 import { extractText } from 'unpdf';
+import JSZip from 'jszip';
+
+/**
+ * Extracts plain text from a DOCX (Office Open XML) buffer using JSZip.
+ */
+export async function extractDocxText(buffer: ArrayBuffer | Uint8Array): Promise<string> {
+  try {
+    const zip = await JSZip.loadAsync(buffer);
+    const docXmlFile = zip.file('word/document.xml');
+    if (!docXmlFile) return '';
+    const xml = await docXmlFile.async('text');
+    const text = xml
+      .replace(/<\/w:p>/g, '\n')
+      .replace(/<w:tab\/>/g, '\t')
+      .replace(/<w:br\/>/g, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .join('\n');
+    return text;
+  } catch (err) {
+    console.warn('Error extracting text from docx:', err);
+    return '';
+  }
+}
+
+/**
+ * Extracts slide texts from a PPTX (Office Open XML) buffer using JSZip.
+ */
+export async function extractPptxText(buffer: ArrayBuffer | Uint8Array): Promise<string> {
+  try {
+    const zip = await JSZip.loadAsync(buffer);
+    const slideFiles = Object.keys(zip.files)
+      .filter(f => f.startsWith('ppt/slides/slide') && f.endsWith('.xml'))
+      .sort((a, b) => {
+        const numA = parseInt(a.replace(/\D/g, ''), 10) || 0;
+        const numB = parseInt(b.replace(/\D/g, ''), 10) || 0;
+        return numA - numB;
+      });
+
+    const slidesText: string[] = [];
+    for (let i = 0; i < slideFiles.length; i++) {
+      const file = zip.file(slideFiles[i]);
+      if (!file) continue;
+      const xml = await file.async('text');
+      const slideText = xml
+        .replace(/<\/a:p>/g, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .join(' ');
+      if (slideText) {
+        slidesText.push(`[Slide ${i + 1}]\n${slideText}`);
+      }
+    }
+    return slidesText.join('\n\n');
+  } catch (err) {
+    console.warn('Error extracting text from pptx:', err);
+    return '';
+  }
+}
 
 // In-memory cache for parsed document texts during the session
 const MAX_PARSED_CACHE = 50;
@@ -37,6 +110,22 @@ function setDocumentCache(key: string, value: string): void {
   documentTextCache.set(key, value);
 }
 
+const failedUrls = new Map<string, number>(); // url -> timestamp
+
+function isUrlTemporarilyFailed(url: string): boolean {
+  const failedAt = failedUrls.get(url);
+  if (!failedAt) return false;
+  if (Date.now() - failedAt > 15 * 60 * 1000) {
+    failedUrls.delete(url);
+    return false;
+  }
+  return true;
+}
+
+function markUrlFailed(url: string) {
+  failedUrls.set(url, Date.now());
+}
+
 export async function parseDocumentFromUrl(
   url: string,
   fileName: string,
@@ -47,8 +136,12 @@ export async function parseDocumentFromUrl(
     return documentTextCache.get(cacheKey)!;
   }
 
+  if (isUrlTemporarilyFailed(url)) {
+    return '';
+  }
+
   try {
-    let fetchUrl = url;
+    const fetchUrl = url;
     const headers: Record<string, string> = {
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -77,7 +170,7 @@ export async function parseDocumentFromUrl(
             'X-With-Generated-Alt': 'true',
             Accept: 'text/markdown, text/plain',
           },
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(3500),
         });
 
         if (jinaRes.ok) {
@@ -87,14 +180,17 @@ export async function parseDocumentFromUrl(
             return markdown.trim();
           }
         }
-      } catch (jinaErr) {
-        console.warn(`Jina Reader direct attempt for ${fetchUrl} skipped/failed:`, jinaErr);
+      } catch {
+        // Fast skip Jina reader if timeout or blocked
       }
     }
 
-    const response = await fetch(fetchUrl, { headers, signal: AbortSignal.timeout(10000) });
+    const response = await fetch(fetchUrl, { headers, signal: AbortSignal.timeout(4000) });
     if (!response.ok) {
       console.warn(`Failed to fetch document from ${fetchUrl}: status ${response.status}`);
+      if (response.status === 403 || response.status === 404 || response.status >= 500) {
+        markUrlFailed(fetchUrl);
+      }
       return '';
     }
 
@@ -118,6 +214,32 @@ export async function parseDocumentFromUrl(
       if (fullText.trim()) {
         setDocumentCache(cacheKey, fullText);
         return fullText;
+      }
+    }
+
+    // For Word documents (.docx)
+    const isDocx =
+      lowerName.endsWith('.docx') ||
+      contentType.includes('wordprocessingml') ||
+      contentType.includes('application/vnd.openxmlformats-officedocument.wordprocessingml');
+    if (isDocx) {
+      const docxText = await extractDocxText(arrayBuffer);
+      if (docxText.trim()) {
+        setDocumentCache(cacheKey, docxText);
+        return docxText;
+      }
+    }
+
+    // For PowerPoint presentations (.pptx)
+    const isPptx =
+      lowerName.endsWith('.pptx') ||
+      contentType.includes('presentationml') ||
+      contentType.includes('application/vnd.openxmlformats-officedocument.presentationml');
+    if (isPptx) {
+      const pptxText = await extractPptxText(arrayBuffer);
+      if (pptxText.trim()) {
+        setDocumentCache(cacheKey, pptxText);
+        return pptxText;
       }
     }
 
@@ -280,6 +402,12 @@ export async function parseDocumentBuffer(buffer: ArrayBuffer | Uint8Array, file
       }
       return String(text || '');
     }
+    if (lowerName.endsWith('.docx')) {
+      return await extractDocxText(buffer);
+    }
+    if (lowerName.endsWith('.pptx')) {
+      return await extractPptxText(buffer);
+    }
     if (lowerName.endsWith('.txt')) {
       const decoder = new TextDecoder('utf-8');
       return decoder.decode(buffer);
@@ -289,4 +417,94 @@ export async function parseDocumentBuffer(buffer: ArrayBuffer | Uint8Array, file
     console.warn(`Error parsing buffer for ${fileName}:`, error);
     return '';
   }
+}
+
+/**
+ * Extracts a Table of Contents (TOC) or structural overview from full document text.
+ * Uses multiple strategies: explicit TOC section detection, heading pattern extraction,
+ * and first-pages fallback. Returns comprehensive structural text for overview/TOC queries.
+ */
+export function extractDocumentTOC(fullText: string, maxLength: number = 8000): string {
+  if (!fullText || fullText.trim().length < 50) return '';
+
+  const lines = fullText.split('\n');
+  const tocParts: string[] = [];
+
+  // ── Strategy 1: Find explicit TOC section ──
+  // Look for "Mục lục" / "Table of Contents" and capture until the next major content section
+  let inTocSection = false;
+  const tocSectionLines: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const lowerTrimmed = trimmed.toLowerCase();
+
+    if (!inTocSection && (
+      /^(mục\s*lục|table\s+of\s+contents|nội\s+dung|danh\s+mục|contents)\s*$/i.test(lowerTrimmed) ||
+      /^(mục\s*lục|table\s+of\s+contents)\s*[:\-–]/i.test(lowerTrimmed)
+    )) {
+      inTocSection = true;
+      tocSectionLines.push(trimmed);
+      continue;
+    }
+
+    if (inTocSection) {
+      // Stop when we hit a major content heading after collecting enough TOC lines
+      if (tocSectionLines.length > 5 && (
+        /^\[trang\s+\d+\]/i.test(lowerTrimmed) ||
+        trimmed.length > 300 // Long paragraph = content, not TOC entry
+      )) {
+        break;
+      }
+      if (trimmed) tocSectionLines.push(trimmed);
+      // Safety: cap at 200 lines to avoid runaway
+      if (tocSectionLines.length > 200) break;
+    }
+  }
+
+  if (tocSectionLines.length > 3) {
+    tocParts.push('=== MỤC LỤC TRÍCH XUẤT TỪ TÀI LIỆU ===\n' + tocSectionLines.join('\n'));
+  }
+
+  // ── Strategy 2: Extract heading patterns throughout the document ──
+  const headingPattern = /^\s*(chương|chapter|phần|part|bài|lesson|mục|section|module)\s+[\divxlcdmIVXLCDM]+[\s.:–\-]/i;
+  const numberedHeadingPattern = /^\s*(\d+(\.\d+){0,2})\s*[.:–\-)\s]\s*[A-ZÀ-Ỹ]/;
+  const headings: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.length > 200) continue;
+
+    if (headingPattern.test(trimmed) || numberedHeadingPattern.test(trimmed)) {
+      // Avoid duplicates from TOC section
+      if (!tocSectionLines.includes(trimmed)) {
+        headings.push(trimmed);
+      }
+    }
+  }
+
+  if (headings.length > 2) {
+    tocParts.push('=== CẤU TRÚC TÀI LIỆU (Các chương / mục phát hiện) ===\n' + headings.join('\n'));
+  }
+
+  // ── Strategy 3: First pages fallback ──
+  // If no explicit TOC or headings found, extract first 5 pages worth of content
+  if (tocParts.length === 0) {
+    let firstPagesContent = '';
+    let pageCount = 0;
+    for (const line of lines) {
+      if (/^\[trang\s+\d+\]/i.test(line.trim())) pageCount++;
+      if (pageCount > 5) break;
+      firstPagesContent += line + '\n';
+    }
+    // If no page markers, just take the first portion of text
+    if (pageCount === 0) {
+      firstPagesContent = lines.slice(0, 80).join('\n');
+    }
+    if (firstPagesContent.trim().length > 50) {
+      tocParts.push('=== NỘI DUNG CÁC TRANG ĐẦU (Chứa mục lục / giới thiệu) ===\n' + firstPagesContent.trim());
+    }
+  }
+
+  const result = tocParts.join('\n\n');
+  return result.length > maxLength ? result.slice(0, maxLength) : result;
 }

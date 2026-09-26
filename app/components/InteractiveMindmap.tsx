@@ -35,6 +35,8 @@ interface InteractiveMindmapProps {
   courseTitle: string;
   levelLabel?: string;
   topic?: string;
+  initialOrientation?: 'horizontal' | 'vertical';
+  onOrientationChange?: (orientation: 'horizontal' | 'vertical') => void;
   onReconfigure?: () => void;
   notify: (msg: string) => void;
 }
@@ -87,14 +89,24 @@ export function InteractiveMindmap({
   courseTitle,
   levelLabel,
   topic,
+  initialOrientation = 'horizontal',
+  onOrientationChange,
   onReconfigure,
   notify,
 }: InteractiveMindmapProps) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // Layout Orientation: 'horizontal' (Left-to-Right) or 'vertical' (Top-to-Bottom)
-  const [orientation, setOrientation] = useState<'horizontal' | 'vertical'>('horizontal');
+  const [orientation, setOrientation] = useState<'horizontal' | 'vertical'>(initialOrientation);
+
+  // Sync orientation when initialOrientation changes from outside
+  useEffect(() => {
+    if (initialOrientation) {
+      setOrientation(initialOrientation);
+    }
+  }, [initialOrientation]);
 
   // Expanded branches set
   const [expandedBranches, setExpandedBranches] = useState<Record<number, boolean>>(() => {
@@ -122,7 +134,7 @@ export function InteractiveMindmap({
   } | null>(null);
 
   const [isExporting, setIsExporting] = useState(false);
-  const [isFullWindow, setIsFullWindow] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Sync expanded state when branches change
   useEffect(() => {
@@ -140,18 +152,63 @@ export function InteractiveMindmap({
     return () => clearTimeout(timer);
   }, [branches]);
 
-  // Handle ESC to exit full window
+  // Sync native fullscreen state via event listeners
   useEffect(() => {
-    if (!isFullWindow) return;
+    const handleFullscreenChange = () => {
+      const activeElement = document.fullscreenElement || (document as any).webkitFullscreenElement;
+      const isNowFullscreen = activeElement === wrapperRef.current;
+      setIsFullscreen(isNowFullscreen);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  // Handle ESC key for fallback mode (when not in native fullscreen)
+  useEffect(() => {
+    if (!isFullscreen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsFullWindow(false);
-        notify('Đã thoát chế độ toàn cửa sổ');
+      if (e.key === 'Escape' && !document.fullscreenElement) {
+        setIsFullscreen(false);
+        notify('Đã thoát chế độ toàn màn hình');
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isFullWindow, notify]);
+  }, [isFullscreen, notify]);
+
+  const toggleFullscreen = async () => {
+    try {
+      const activeElement = document.fullscreenElement || (document as any).webkitFullscreenElement;
+      if (activeElement) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen();
+        }
+        notify('Đã thoát chế độ toàn màn hình');
+      } else if (wrapperRef.current) {
+        if (wrapperRef.current.requestFullscreen) {
+          await wrapperRef.current.requestFullscreen();
+        } else if ((wrapperRef.current as any).webkitRequestFullscreen) {
+          await (wrapperRef.current as any).webkitRequestFullscreen();
+        }
+        notify('Chế độ toàn màn hình (Nhấn phím ESC để thoát)');
+      }
+    } catch (err) {
+      console.warn('Fullscreen request failed, falling back to full-window CSS mode:', err);
+      setIsFullscreen(prev => {
+        const next = !prev;
+        notify(next ? 'Chế độ toàn màn hình (Nhấn phím ESC để thoát)' : 'Đã thoát chế độ toàn màn hình');
+        return next;
+      });
+    }
+  };
 
   const toggleBranch = (idx: number) => {
     setExpandedBranches(prev => ({
@@ -598,7 +655,18 @@ export function InteractiveMindmap({
   };
 
   return (
-    <div className={`artifact notebook-mindmap-wrapper ${isFullWindow ? 'is-full-window' : ''}`}>
+    <div
+      ref={wrapperRef}
+      className={`artifact notebook-mindmap-wrapper ${isFullscreen ? 'is-fullscreen is-full-window' : ''}`}
+      style={isFullscreen ? undefined : {
+        height: 'calc(100vh - 230px)',
+        minHeight: '560px',
+        maxHeight: '85vh',
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
       {/* Top Header Toolbar */}
       <div className="artifact-head">
         <div>
@@ -630,6 +698,7 @@ export function InteractiveMindmap({
               setOrientation(next);
               setNodeOffsets({});
               notify(`Đã chuyển hướng hiển thị: ${next === 'horizontal' ? 'Ngang (Trái sang Phải)' : 'Dọc (Trên xuống Dưới)'}`);
+              onOrientationChange?.(next);
             }}
             title="Chuyển đổi hướng bố cục sơ đồ tư duy"
           >
@@ -659,21 +728,15 @@ export function InteractiveMindmap({
             {areAllExpanded ? 'Thu gọn' : 'Mở rộng'}
           </button>
 
-          {/* Full Window Toggle Button */}
+          {/* Fullscreen Toggle Button */}
           <button
             className="reconfigure-btn"
-            onClick={() => {
-              setIsFullWindow(prev => {
-                const next = !prev;
-                notify(next ? 'Chế độ toàn màn hình (Nhấn phím ESC để thoát)' : 'Đã thoát chế độ toàn màn hình');
-                return next;
-              });
-            }}
-            title={isFullWindow ? 'Thu nhỏ lại (ESC)' : 'Xem toàn cửa sổ'}
+            onClick={toggleFullscreen}
+            title={isFullscreen ? 'Thu nhỏ lại (ESC)' : 'Xem toàn màn hình (Fullscreen)'}
             style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >
-            {isFullWindow ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            {isFullWindow ? 'Thu nhỏ' : 'Toàn cửa sổ'}
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            {isFullscreen ? 'Thu nhỏ' : 'Toàn màn hình'}
           </button>
 
           <button
@@ -692,17 +755,6 @@ export function InteractiveMindmap({
             <ImageIcon size={14} />
             {isExporting ? 'Đang xuất tệp…' : 'Xuất ảnh PNG'}
           </button>
-
-          <button
-            onClick={() => {
-              window.print();
-              notify('Đã mở giao diện in / lưu PDF');
-            }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-          >
-            <Printer size={14} />
-            In tài liệu
-          </button>
         </div>
       </div>
 
@@ -711,10 +763,16 @@ export function InteractiveMindmap({
         className="notebook-canvas-container"
         ref={containerRef}
         onMouseDown={handleCanvasMouseDown}
-        style={{ cursor: isPanning ? 'grabbing' : 'grab' }}
+        style={{
+          cursor: isPanning ? 'grabbing' : 'grab',
+          minHeight: isFullscreen ? undefined : '480px',
+          height: '100%',
+          flex: '1 1 0%',
+          width: '100%',
+        }}
       >
         {/* Floating Zoom Controls (with single reset button) */}
-        <div className="canvas-zoom-controls">
+        <div className="canvas-zoom-controls" style={{ left: '24px', right: 'auto' }}>
           <button type="button" onClick={() => handleZoom(0.15)} title="Phóng to" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <ZoomIn size={15} />
           </button>

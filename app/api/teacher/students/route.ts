@@ -39,7 +39,6 @@ export async function GET(request: Request) {
       gradeItems: [
         { id: 1, name: 'Kiểm tra trắc nghiệm lần 1', itemtype: 'mod', itemmodule: 'quiz', iteminstance: 1, grademax: 10 },
         { id: 2, name: 'Bài tập thực hành tuần 2', itemtype: 'mod', itemmodule: 'assign', iteminstance: 2, grademax: 10 },
-        { id: 3, name: 'Điểm chuyên cần & tích cực', itemtype: 'manual', itemmodule: '', iteminstance: 0, grademax: 10 },
       ],
       initialScores: {},
       initialFeedbacks: {},
@@ -133,7 +132,23 @@ export async function GET(request: Request) {
         initialFeedbacks[student.id] = initialFeedbacks[student.id] || {};
 
         for (const item of res.value.usergrades[0].gradeitems) {
-          if (!item.itemname || item.itemtype === 'course' || item.itemname.toLowerCase().includes('course total') || item.itemname.toLowerCase().includes('tổng kết')) {
+          const itemModule = (item.itemmodule || '').toLowerCase();
+          const itemName = (item.itemname || '').toLowerCase();
+          const itemType = (item.itemtype || '').toLowerCase();
+
+          // Exclude course totals and attendance items from gradebook
+          if (
+            !item.itemname ||
+            itemType === 'course' ||
+            itemName.includes('course total') ||
+            itemName.includes('tổng kết') ||
+            itemModule === 'attendance' ||
+            itemModule.includes('attendance') ||
+            itemName.includes('attendance') ||
+            itemType === 'attendance' ||
+            itemName.includes('điểm danh') ||
+            itemName.includes('chuyên cần')
+          ) {
             continue;
           }
 

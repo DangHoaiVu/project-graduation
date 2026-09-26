@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { BookOpen, GraduationCap } from 'lucide-react';
+import Link from 'next/link';
+import { BookOpen, GraduationCap, ArrowLeft } from 'lucide-react';
 import type { Course } from '@/app/types';
 import { CourseSwitcher } from './CourseSwitcher';
 
@@ -22,11 +23,13 @@ export function CourseHeader({
 }: CourseHeaderProps) {
   return (
     <header className={`course-header-root ${className}`}>
-      {/* Top Metadata Row: Eyebrow on left, Role badge on right */}
+      {/* Top Metadata Row: Back to Home + Eyebrow on left, Role badge on right */}
       <div className="course-header-meta-row">
-        <span className="course-header-eyebrow">
-          {isTeacher ? 'BÀN LÀM VIỆC GIẢNG VIÊN' : 'KHÔNG GIAN MÔN HỌC & GIA SƯ AI'}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span className="course-header-eyebrow">
+            {isTeacher ? 'BÀN LÀM VIỆC GIẢNG VIÊN' : 'KHÔNG GIAN MÔN HỌC & GIA SƯ AI'}
+          </span>
+        </div>
         <span className={`course-header-role-badge ${isTeacher ? 'role-teacher' : 'role-student'}`}>
           {isTeacher ? <GraduationCap size={13} /> : <BookOpen size={13} />}
           <span>{isTeacher ? 'Vai trò: Giảng viên' : 'Vai trò: Học viên'}</span>

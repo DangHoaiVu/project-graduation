@@ -41,6 +41,7 @@ import {
   ShieldCheck,
   Award,
   Calendar,
+  CalendarDays,
   CalendarCheck,
   Clock,
   AlertCircle,
@@ -60,6 +61,7 @@ import {
 } from '@/app/mock-data';
 import type {
   ChatMessage,
+  CitationSource,
   Course,
   CourseSourceItem,
   ErrorResponse,
@@ -95,7 +97,9 @@ import { SlidePresentation } from '@/app/components/SlidePresentation';
 import type { SlideDeckData } from '@/lib/pptx-export';
 import { TeacherPortal } from '@/app/components/teacher/TeacherPortal';
 import { exportSummaryToDocx, copyRichHtmlForWord, exportChatMessageToDocx } from '@/lib/export-utils';
+import { cleanSummaryData } from '@/lib/summary-cleaner';
 import { getDeviceId } from '@/app/lib/device-id';
+import { registerFcmToken, unregisterFcmToken } from '@/app/lib/notification-client';
 
 const MOODLE_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 
@@ -209,6 +213,7 @@ interface GeneratedArtifact {
   data: unknown;
   level: 'simple' | 'standard' | 'complex';
   topic: string;
+  orientation?: 'horizontal' | 'vertical';
 }
 
 function StudyArtifact({
@@ -219,6 +224,7 @@ function StudyArtifact({
   selectedSourcesCount,
   onGenerate,
   onReset,
+  onOrientationChange,
   onStop,
   copyText,
   notify,
@@ -230,6 +236,7 @@ function StudyArtifact({
   selectedSourcesCount: number;
   onGenerate: (level: 'simple' | 'standard' | 'complex', topic: string, allowExternal: boolean) => void;
   onReset: () => void;
+  onOrientationChange?: (artifactId: string, orientation: 'horizontal' | 'vertical') => void;
   onStop?: () => void;
   copyText: (s: string) => void;
   notify: (s: string) => void;
@@ -464,7 +471,8 @@ function StudyArtifact({
   }
 
   if (type === 'Mindmap') {
-    const map = artifact.data as { root: string; branches: Array<{ title: string; items: string[] }> };
+    const map = artifact.data as { root: string; branches: Array<{ title: string; items: string[] }>; orientation?: 'horizontal' | 'vertical' };
+    const initialOrientation = artifact.orientation || map?.orientation || 'horizontal';
     return (
       <InteractiveMindmap
         root={map.root || courseTitle}
@@ -472,6 +480,12 @@ function StudyArtifact({
         courseTitle={courseTitle}
         levelLabel={levelLabel}
         topic={artifact.topic}
+        initialOrientation={initialOrientation}
+        onOrientationChange={(newOrientation) => {
+          if (onOrientationChange && artifact.id) {
+            onOrientationChange(artifact.id, newOrientation);
+          }
+        }}
         onReconfigure={onReset}
         notify={notify}
       />
@@ -505,7 +519,7 @@ function StudyArtifact({
   }
 
   // Summary
-  const summary = artifact.data as { title: string; overview: string; points: string[] };
+  const summary = cleanSummaryData(artifact.data as { title: string; overview: string; points: string[] });
   const text = `${summary.title}\n\n${summary.overview}\n\n${(summary.points ?? []).map(x => `• ${x}`).join('\n')}`;
 
   const handleExportDocx = async () => {
@@ -623,6 +637,8 @@ function isStudentSource(item: CourseSourceItem) {
   return Boolean(
     item.id?.startsWith('mat-') ||
     item.id?.startsWith('upload-') ||
+    item.id?.startsWith('url-') ||
+    item.id?.startsWith('note-') ||
     item.sizeOrPages?.includes('cá nhân') ||
     item.sizeOrPages?.includes('đã nạp') ||
     item.sizeOrPages?.includes('Ghi chú')
@@ -678,11 +694,22 @@ function CourseDetailContent() {
   };
 
   const handleLogout = async () => {
+    try {
+      await unregisterFcmToken(user?.id);
+    } catch (e) {
+      console.warn('FCM unregister error on logout:', e);
+    }
     localStorage.removeItem('moodleToken');
     localStorage.removeItem('moodleUser');
     localStorage.removeItem('moodleData');
     router.push('/login');
   };
+
+  useEffect(() => {
+    if (user?.id) {
+      void registerFcmToken(user.id);
+    }
+  }, [user?.id]);
 
   // Sync Moodle data and read local caches
   const syncMoodleData = async (force = false) => {
@@ -842,6 +869,13 @@ function CourseDetailContent() {
     );
   }, [queryId, queryCode, queryName, allCourses]);
 
+  // Redirect to /home if no course was specified in the URL params (e.g. Back button or empty /course)
+  useEffect(() => {
+    if (!queryCode && !queryName && !queryId) {
+      router.replace('/home');
+    }
+  }, [queryCode, queryName, queryId, router]);
+
   const isTeacherCourse = Boolean(activeCourse.isTeacher);
 
   const handleCourseChange = (target: Course) => {
@@ -874,13 +908,21 @@ function CourseDetailContent() {
       });
 
       moodleMatches.forEach((mr, idx) => {
+        const fileId = mr.fileId || mr.moduleId || (idx + 1);
         results.push({
-          id: `moodle-${mr.courseId ?? activeCourse.id}-${idx}`,
+          id: `moodle-${mr.courseId ?? activeCourse.id}-${fileId}`,
           name: mr.name || mr.module || 'Tài liệu Moodle',
           type: mr.type || 'FILE',
-          sizeOrPages: mr.module ? `Moodle · ${mr.module}` : 'Tài liệu Moodle',
+          sizeOrPages: mr.sectionName ? `Moodle · ${mr.sectionName}` : mr.module ? `Moodle · ${mr.module}` : 'Tài liệu Moodle',
           url: mr.url || undefined,
           courseCode: activeCourse.code,
+          courseId: activeCourse.id ?? mr.courseId,
+          moduleId: mr.moduleId,
+          fileId,
+          sectionId: mr.sectionId,
+          sectionName: mr.sectionName,
+          chapter: mr.sectionName || undefined,
+          isStudentUpload: false,
         });
       });
     }
@@ -975,17 +1017,19 @@ function CourseDetailContent() {
   const [answerStyle, setAnswerStyle] = useState<'concise' | 'detailed'>('concise');
   const [isSourcePanelCollapsed, setIsSourcePanelCollapsed] = useState<boolean>(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const selectedModel = 'auto';
+  const [selectedModel] = useState<string>('auto');
   const [mounted, setMounted] = useState<boolean>(false);
   useEffect(() => {
     setMounted(true);
-    if (typeof window !== 'undefined' && window.innerWidth < 1100) {
-      setIsSourcePanelCollapsed(true);
+    if (typeof window !== 'undefined') {
+      if (window.innerWidth < 1100) {
+        setIsSourcePanelCollapsed(true);
+      }
     }
   }, []);
   const [showGradeHistory, setShowGradeHistory] = useState<boolean>(false);
   const [showActivityModal, setShowActivityModal] = useState<boolean>(false);
-  const [teacherTab, setTeacherTab] = useState<'assistant' | 'grades' | 'quiz'>('assistant');
+  const [teacherTab, setTeacherTab] = useState<'assistant' | 'grades' | 'quiz' | 'notifications'>('assistant');
   const askedIntent = useRef(false);
 
   // Student Document & Resource Upload Modal State
@@ -1033,6 +1077,8 @@ function CourseDetailContent() {
               sizeOrPages: 'Tài liệu cá nhân',
               url: rawUrl || undefined,
               courseCode: activeCourse.code,
+              courseId: currentCourseId,
+              isStudentUpload: true,
             };
           });
 
@@ -1078,6 +1124,7 @@ function CourseDetailContent() {
               let artifactData = cd;
               let level: 'simple' | 'standard' | 'complex' = 'standard';
               let topic = activeCourse.name;
+              let orientation: 'horizontal' | 'vertical' | undefined = undefined;
               if (cd && typeof cd === 'object') {
                 if ('data' in cd) artifactData = (cd as Record<string, unknown>).data;
                 if ('level' in cd && typeof (cd as Record<string, unknown>).level === 'string') {
@@ -1086,8 +1133,16 @@ function CourseDetailContent() {
                 if ('topic' in cd && typeof (cd as Record<string, unknown>).topic === 'string') {
                   topic = (cd as { topic: string }).topic;
                 }
+                if ('orientation' in cd) {
+                  const o = (cd as Record<string, unknown>).orientation;
+                  if (o === 'horizontal' || o === 'vertical') orientation = o;
+                }
               }
-              const hydratedArtifact = {
+              if (!orientation && artifactData && typeof artifactData === 'object' && 'orientation' in artifactData) {
+                const o = (artifactData as Record<string, unknown>).orientation;
+                if (o === 'horizontal' || o === 'vertical') orientation = o;
+              }
+              const hydratedArtifact: GeneratedArtifact = {
                 id: String((a as { id?: string | number }).id || `${toolKey}-${Date.now()}-${Math.random()}`),
                 name: cd && typeof cd === 'object' && typeof (cd as Record<string, unknown>).name === 'string'
                   ? (cd as Record<string, unknown>).name as string
@@ -1095,6 +1150,7 @@ function CourseDetailContent() {
                 data: artifactData,
                 level,
                 topic,
+                orientation,
               };
               hydratedMap[toolKey] = [...(hydratedMap[toolKey] || []), hydratedArtifact];
             }
@@ -1121,6 +1177,7 @@ function CourseDetailContent() {
         const chatData = (await chatRes.json()) as {
           latest?: {
             id?: string;
+            response_model?: string;
             messages?: ChatMessage[];
           };
         };
@@ -1130,7 +1187,13 @@ function CourseDetailContent() {
           Array.isArray(chatData.latest.messages) &&
           chatData.latest.messages.length > 0
         ) {
-          setChat(chatData.latest.messages as ChatMessage[]);
+          const loadedMessages = chatData.latest.messages.map(m => {
+            if (m.role === 'ai' && !m.model && chatData.latest?.response_model) {
+              return { ...m, model: chatData.latest.response_model };
+            }
+            return m;
+          });
+          setChat(loadedMessages as ChatMessage[]);
           if (chatData.latest.id) setChatSessionId(String(chatData.latest.id));
         }
       } catch (err) {
@@ -1145,15 +1208,26 @@ function CourseDetailContent() {
     };
   }, [activeCourse.id, user?.id, activeCourse.code, activeCourse.name]);
 
-  // Compute exam results for current active course ONLY
+  // Compute exam results for current active course ONLY (excluding attendance)
   const courseExamResults = useMemo(() => {
     if (!moodle?.examResults?.length) return [];
-    return moodle.examResults.filter(
-      r =>
+    return moodle.examResults.filter(r => {
+      const mod = (r.itemModule || '').toLowerCase();
+      const name = (r.name || '').toLowerCase();
+      if (
+        mod === 'attendance' ||
+        mod.includes('attendance') ||
+        name.includes('attendance') ||
+        name.includes('điểm danh')
+      ) {
+        return false;
+      }
+      return (
         (activeCourse.id && String(r.courseId) === String(activeCourse.id)) ||
         (activeCourse.code && r.courseCode?.toLowerCase() === activeCourse.code.toLowerCase()) ||
         (activeCourse.name && r.courseName?.toLowerCase() === activeCourse.name.toLowerCase())
-    );
+      );
+    });
   }, [moodle?.examResults, activeCourse.id, activeCourse.code, activeCourse.name]);
 
   // Compute course activities (Moodle deadlines & exams merged by base name)
@@ -1244,6 +1318,7 @@ function CourseDetailContent() {
   const [analysisModalOpen, setAnalysisModalOpen] = useState(false);
   const [currentAnalysis, setCurrentAnalysis] = useState<QuizAnalysisData | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisLoadingStage, setAnalysisLoadingStage] = useState<'fetching_saved' | 'ai_diagnosing'>('fetching_saved');
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [selectedExamResult, setSelectedExamResult] = useState<ExamResult | null>(null);
   const [analyzedAttemptIds, setAnalyzedAttemptIds] = useState<Set<number>>(new Set());
@@ -1251,6 +1326,18 @@ function CourseDetailContent() {
   const [quizInitialTopics, setQuizInitialTopics] = useState<string[]>([]);
   const [selectedStrategies, setSelectedStrategies] = useState<GradeResponseStrategy[]>(['roadmap']);
   const [hideStrategyBar, setHideStrategyBar] = useState<boolean>(false);
+  const analysisAbortRef = useRef<AbortController | null>(null);
+
+  const handleStopQuizAnalysis = () => {
+    if (analysisAbortRef.current) {
+      analysisAbortRef.current.abort();
+      analysisAbortRef.current = null;
+    }
+    setAnalysisLoading(false);
+    if (!currentAnalysis) {
+      setAnalysisError('Đã dừng quá trình chẩn đoán bài thi.');
+    }
+  };
 
   // Auto-restore selectedExamResult when navigating via URL with prompt intent
   useEffect(() => {
@@ -1262,35 +1349,37 @@ function CourseDetailContent() {
     }
   }, [courseExamResults, input, selectedExamResult]);
 
-  // Check saved analyses for this course (localStorage first, then sync with database)
+  // Sync analyzed status with database source of truth
   useEffect(() => {
-    // 1. Instant local check
     const localIds = getAllStoredAttemptIds();
-    if (localIds.length > 0) {
-      setAnalyzedAttemptIds(new Set(localIds));
-    }
+    setAnalyzedAttemptIds(new Set(localIds));
 
-    // 2. Sync with database
-    if (activeCourse?.id) {
-      fetch(`/api/quiz/analysis?courseId=${activeCourse.id}`)
-        .then(r => r.json() as Promise<{ analyses?: QuizAnalysisData[] }>)
-        .then(data => {
-          if (data?.analyses?.length) {
-            setAnalyzedAttemptIds(prev => {
-              const next = new Set(prev);
-              data.analyses!.forEach(a => {
-                if (a.attemptId) {
-                  next.add(Number(a.attemptId));
-                  saveStoredAnalysis(a.attemptId, a);
-                }
-              });
-              return next;
-            });
+    fetch('/api/quiz/analysis')
+      .then(r => r.json() as Promise<{ analyses?: QuizAnalysisData[] }>)
+      .then(data => {
+        const serverAnalyses = data?.analyses || [];
+        const serverAttemptIds = new Set<number>();
+        for (const item of serverAnalyses) {
+          if (item?.attemptId) {
+            serverAttemptIds.add(Number(item.attemptId));
+            saveStoredAnalysis(item.attemptId, item);
           }
-        })
-        .catch(() => {});
-    }
-  }, [activeCourse?.id]);
+        }
+        setAnalyzedAttemptIds(serverAttemptIds);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Listen to popstate event to close grade history or modal if open
+  useEffect(() => {
+    const onPop = () => {
+      setShowGradeHistory(false);
+      setShowActivityModal(false);
+      setAnalysisModalOpen(false);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   // Sync tool and targeted remediation mode from searchParams
   useEffect(() => {
@@ -1314,6 +1403,16 @@ function CourseDetailContent() {
     }
   }, [searchParams]);
 
+  // Keep search params synced with state
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams?.toString() ?? '');
+    if (tool) params.set('tool', tool);
+    else params.delete('tool');
+    const newQuery = params.toString();
+    const newUrl = `${window.location.pathname}${newQuery ? `?${newQuery}` : ''}`;
+    window.history.replaceState(null, '', newUrl);
+  }, [tool, searchParams]);
+
   // Handler to ask AI about an exam result (with 2x2 context matrix routing)
   const handleAskAiAboutGrade = async (res: ExamResult, forceReanalyze = false) => {
     setSelectedExamResult(res);
@@ -1321,7 +1420,7 @@ function CourseDetailContent() {
     const isAnalyzed = !!res.attemptId && analyzedAttemptIds.has(Number(res.attemptId));
     const route = resolveGradeRoute(res, isAnalyzed);
 
-    // 1. Chat Action: Case 3 (Khuếch đại lời phê) or Case 4 (Điểm mù - Phỏng vấn viên)
+    // 1. Chat Action: Ôn tập theo nhận xét hoặc Gia sư AI
     // Directly place prompt into input of course chat
     if (route.actionType === 'chat') {
       setShowGradeHistory(false);
@@ -1342,13 +1441,14 @@ function CourseDetailContent() {
       return;
     }
 
-    // 2. Modal Action: Case 1 (Toàn tri) or Case 2 (Phân tích kỹ thuật)
+    // 2. Modal Action: Chẩn đoán chi tiết bài thi
     const attemptIdToUse = res.attemptId;
     if (attemptIdToUse) {
       setShowGradeHistory(false);
 
       // Instant re-open: if already loaded in component state
       if (currentAnalysis && Number(currentAnalysis.attemptId) === Number(attemptIdToUse) && !forceReanalyze) {
+        setAnalysisError(null);
         setAnalysisModalOpen(true);
         return;
       }
@@ -1358,19 +1458,32 @@ function CourseDetailContent() {
         const localCached = getStoredAnalysis(attemptIdToUse);
         if (localCached) {
           setCurrentAnalysis(localCached);
+          setAnalysisError(null);
           setAnalysisModalOpen(true);
           return;
         }
       }
 
+      // Abort any ongoing diagnosis request
+      if (analysisAbortRef.current) {
+        analysisAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      analysisAbortRef.current = controller;
+
+      // Clear previous analysis to prevent showing old exam title or data while loading
+      setCurrentAnalysis(null);
       setAnalysisModalOpen(true);
       setAnalysisLoading(true);
+      setAnalysisLoadingStage('fetching_saved');
       setAnalysisError(null);
 
       try {
         // Database cache-first: fetch existing saved analysis before spending AI credits
         if (!forceReanalyze) {
-          const checkRes = await fetch(`/api/quiz/analysis?attemptId=${attemptIdToUse}`);
+          const checkRes = await fetch(`/api/quiz/analysis?attemptId=${attemptIdToUse}`, {
+            signal: controller.signal,
+          });
           const checkText = await checkRes.text();
           let checkData: { analysis?: QuizAnalysisData; error?: string } = {};
           try {
@@ -1387,10 +1500,14 @@ function CourseDetailContent() {
           }
         }
 
+        // Need new AI diagnosis: indicate to user that AI generation is starting
+        setAnalysisLoadingStage('ai_diagnosing');
+
         // Trigger analysis with 2x2 matrix context flags
         const apiRes = await fetch('/api/quiz/analysis', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
           body: JSON.stringify({
             attemptId: attemptIdToUse,
             courseId: res.courseId,
@@ -1417,9 +1534,16 @@ function CourseDetailContent() {
         setCurrentAnalysis(data.analysis);
         saveStoredAnalysis(attemptIdToUse, data.analysis);
         setAnalyzedAttemptIds(prev => new Set(prev).add(Number(attemptIdToUse)));
-      } catch (err) {
-        setAnalysisError(err instanceof Error ? err.message : 'Có lỗi khi phân tích bài thi.');
+      } catch (err: any) {
+        if (err?.name === 'AbortError') {
+          setAnalysisError('Đã dừng quá trình chẩn đoán bài thi.');
+        } else {
+          setAnalysisError(err instanceof Error ? err.message : 'Có lỗi khi phân tích bài thi.');
+        }
       } finally {
+        if (analysisAbortRef.current === controller) {
+          analysisAbortRef.current = null;
+        }
         setAnalysisLoading(false);
       }
       return;
@@ -1512,14 +1636,21 @@ function CourseDetailContent() {
       abortControllerRef.current = null;
     }
     setLoading(false);
-    setChat(v => [
-      ...v,
-      {
-        role: 'ai',
-        text: '*(Đã dừng câu trả lời theo yêu cầu)*',
-        sources: [],
-      },
-    ]);
+    setChat(v => {
+      const updated = [...v];
+      if (updated.length > 0 && updated[updated.length - 1].role === 'ai') {
+        const lastMsg = updated[updated.length - 1];
+        const currentText = lastMsg.text.trim();
+        updated[updated.length - 1] = {
+          ...lastMsg,
+          text: currentText ? `${currentText}\n\n*(Đã dừng câu trả lời theo yêu cầu)*` : '*(Đã dừng câu trả lời theo yêu cầu)*',
+          model: lastMsg.model,
+          provider: lastMsg.provider,
+        };
+        return updated;
+      }
+      return v;
+    });
   };
 
   // Auto-collapse source panel on compact windows (e.g. tablet / split-screen)
@@ -1562,7 +1693,10 @@ function CourseDetailContent() {
     try {
       const res = await fetch('/api/tutor', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream, application/json',
+        },
         signal: controller.signal,
         body: JSON.stringify({
           question: q,
@@ -1570,56 +1704,236 @@ function CourseDetailContent() {
           courseId: activeCourse.id,
           courseCode: activeCourse.code,
           userId: user?.id || 4,
+          userName: user?.fullname || 'Sinh viên',
           gradebook: courseExamResults,
+          upcomingDeadlines: courseActivities.map(a => ({
+            name: a.name,
+            timestamp: a.timestamp,
+            type: a.type,
+            url: a.url,
+          })),
           sources: selectedSources,
           sourceNames: selectedSourceNames,
+          sectionId: selectedSources.find(s => s.sectionId)?.sectionId,
+          sectionName: selectedSources.find(s => s.sectionName)?.sectionName,
+          chapter: selectedSources.find(s => s.chapter)?.chapter,
           allowExternalSource,
           answerStyle,
           model: selectedModel,
+          stream: true,
           history: chat.slice(1).map(c => ({ role: c.role, text: c.text })),
         }),
       });
-      const data = (await res.json()) as TutorResponse;
-      if (!res.ok) throw new Error(data.error);
-      const aiReply: ChatMessage = {
-        role: 'ai',
-        text: data.answer ?? '',
-        sources: data.sources ?? [],
-      };
-      setChat(v => {
-        const updated = [...v, aiReply];
-        const uId = user?.id || 4;
-        const cId = activeCourse.id || 1;
-        fetch('/api/chat-sessions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId: uId,
-            userName: user?.fullname || 'Sinh viên',
-            moodleCourseId: cId,
-            sessionId: chatSessionId || undefined,
-            messages: updated,
-          }),
+
+      if (!res.ok) {
+        let errMessage = 'Lỗi kết nối tới Trợ lý AI.';
+        try {
+          const errData = (await res.json()) as { error?: string };
+          if (errData?.error) errMessage = errData.error;
+        } catch {
+          // ignore
+        }
+        throw new Error(errMessage);
+      }
+
+      const contentType = res.headers.get('content-type') || '';
+      let fullAnswer = '';
+      let receivedSources: Array<string | CitationSource> = [];
+      let responseModelName = '';
+      let responseProviderName = '';
+
+      if (contentType.includes('text/event-stream') && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith('data:')) continue;
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr === '[DONE]') continue;
+
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.model) {
+                responseModelName = parsed.model;
+              }
+              if (parsed.provider) {
+                responseProviderName = parsed.provider;
+              }
+              if (parsed.meta) {
+                setChat(v => {
+                  const updated = [...v];
+                  if (updated.length > 0 && updated[updated.length - 1].role === 'ai') {
+                    updated[updated.length - 1] = {
+                      ...updated[updated.length - 1],
+                      model: responseModelName || updated[updated.length - 1].model,
+                      provider: responseProviderName || updated[updated.length - 1].provider,
+                    };
+                  }
+                  return updated;
+                });
+              }
+              if (parsed.delta) {
+                fullAnswer += parsed.delta;
+                setChat(v => {
+                  const updated = [...v];
+                  if (updated.length > 0 && updated[updated.length - 1].role === 'ai') {
+                    updated[updated.length - 1] = {
+                      ...updated[updated.length - 1],
+                      text: fullAnswer,
+                      model: responseModelName || updated[updated.length - 1].model,
+                      provider: responseProviderName || updated[updated.length - 1].provider,
+                    };
+                  } else {
+                    updated.push({
+                      role: 'ai',
+                      text: fullAnswer,
+                      sources: [],
+                      model: responseModelName,
+                      provider: responseProviderName,
+                    });
+                  }
+                  return updated;
+                });
+              }
+              if (parsed.sources && Array.isArray(parsed.sources)) {
+                receivedSources = parsed.sources;
+                setChat(v => {
+                  const updated = [...v];
+                  if (updated.length > 0 && updated[updated.length - 1].role === 'ai') {
+                    updated[updated.length - 1] = {
+                      ...updated[updated.length - 1],
+                      sources: receivedSources,
+                      model: responseModelName || updated[updated.length - 1].model,
+                      provider: responseProviderName || updated[updated.length - 1].provider,
+                    };
+                  } else {
+                    updated.push({
+                      role: 'ai',
+                      text: fullAnswer,
+                      sources: receivedSources,
+                      model: responseModelName,
+                      provider: responseProviderName,
+                    });
+                  }
+                  return updated;
+                });
+              }
+              if (parsed.done) {
+                if (parsed.model) responseModelName = parsed.model;
+                if (parsed.provider) responseProviderName = parsed.provider;
+                setChat(v => {
+                  const updated = [...v];
+                  if (updated.length > 0 && updated[updated.length - 1].role === 'ai') {
+                    updated[updated.length - 1] = {
+                      ...updated[updated.length - 1],
+                      model: responseModelName || updated[updated.length - 1].model,
+                      provider: responseProviderName || updated[updated.length - 1].provider,
+                    };
+                  }
+                  return updated;
+                });
+              }
+              if (parsed.error) {
+                throw new Error(parsed.error);
+              }
+            } catch (pErr) {
+              if (pErr instanceof Error && pErr.message !== 'Unexpected end of JSON input') {
+                console.warn('SSE parse error:', pErr);
+              }
+            }
+          }
+        }
+      } else {
+        const data = (await res.json()) as TutorResponse & { model?: string; provider?: string };
+        fullAnswer = data.answer ?? '';
+        receivedSources = (data.sources ?? []) as Array<string | CitationSource>;
+        responseModelName = data.model || 'Groq LPU';
+        responseProviderName = data.provider || 'groq';
+        setChat(v => {
+          const updated = [...v];
+          if (updated.length > 0 && updated[updated.length - 1].role === 'ai') {
+            updated[updated.length - 1] = {
+              role: 'ai',
+              text: fullAnswer,
+              sources: receivedSources,
+              model: responseModelName,
+              provider: responseProviderName,
+            };
+          } else {
+            updated.push({
+              role: 'ai',
+              text: fullAnswer,
+              sources: receivedSources,
+              model: responseModelName,
+              provider: responseProviderName,
+            });
+          }
+          return updated;
+        });
+      }
+
+      // Save to chat-sessions database with response_model
+      const uId = user?.id || 4;
+      const cId = activeCourse.id || 1;
+      const finalChatMessages: ChatMessage[] = [
+        ...nextChat,
+        {
+          role: 'ai',
+          text: fullAnswer,
+          sources: receivedSources,
+          model: responseModelName,
+          provider: responseProviderName,
+        },
+      ];
+
+      fetch('/api/chat-sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: uId,
+          userName: user?.fullname || 'Sinh viên',
+          moodleCourseId: cId,
+          sessionId: chatSessionId || undefined,
+          messages: finalChatMessages,
+          response_model: responseModelName,
+        }),
+      })
+        .then(response => response.json() as Promise<{ session?: { id?: string } }>)
+        .then(result => {
+          if (result.session?.id) setChatSessionId(String(result.session.id));
         })
-          .then(response => response.json() as Promise<{ session?: { id?: string } }>)
-          .then(result => {
-            if (result.session?.id) setChatSessionId(String(result.session.id));
-          })
-          .catch(err => console.warn('Chat session save note:', err));
-        return updated;
-      });
+        .catch(err => console.warn('Chat session save note:', err));
     } catch (e) {
       if ((e as Error)?.name === 'AbortError') {
         return;
       }
-      setChat(v => [
-        ...v,
-        {
-          role: 'ai',
-          text: e instanceof Error ? e.message : 'Không thể kết nối gia sư lúc này.',
-          sources: [],
-        },
-      ]);
+      setChat(v => {
+        const updated = [...v];
+        if (updated.length > 0 && updated[updated.length - 1].role === 'ai') {
+          updated[updated.length - 1] = {
+            role: 'ai',
+            text: e instanceof Error ? e.message : 'Không thể kết nối gia sư lúc này.',
+            sources: [],
+          };
+        } else {
+          updated.push({
+            role: 'ai',
+            text: e instanceof Error ? e.message : 'Không thể kết nối gia sư lúc này.',
+            sources: [],
+          });
+        }
+        return updated;
+      });
     } finally {
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
@@ -1651,7 +1965,16 @@ function CourseDetailContent() {
 
   // Tab switching simply activates the view without auto-fetching
   const openTool = (next: string) => {
-    setTool(next);
+    if (tool === next) {
+      if ((artifactsMap[next] || []).length > 0) {
+        setShowArtifactList(prev => !prev);
+      }
+    } else {
+      setTool(next);
+      if ((artifactsMap[next] || []).length > 0 && !selectedArtifactIds[next]) {
+        setShowArtifactList(true);
+      }
+    }
   };
 
   // Manual abort for artifact generation
@@ -1743,6 +2066,7 @@ function CourseDetailContent() {
         data: data.data,
         level,
         topic: topic || activeCourse.name,
+        orientation: type === 'Mindmap' ? 'horizontal' : undefined,
       };
       setArtifactsMap(prev => ({ ...prev, [type]: [...(prev[type] || []), newArtifact] }));
       setSelectedArtifactIds(prev => ({ ...prev, [type]: newArtifact.id }));
@@ -1814,6 +2138,36 @@ function CourseDetailContent() {
       notify('Đã xóa học liệu.');
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Không thể xóa học liệu.');
+    }
+  };
+
+  const updateToolArtifactOrientation = async (type: string, artifactId: string, orientation: 'horizontal' | 'vertical') => {
+    setArtifactsMap(prev => ({
+      ...prev,
+      [type]: (prev[type] || []).map(item =>
+        item.id === artifactId
+          ? {
+              ...item,
+              orientation,
+              data: typeof item.data === 'object' && item.data !== null
+                ? { ...(item.data as Record<string, unknown>), orientation }
+                : item.data,
+            }
+          : item
+      ),
+    }));
+
+    try {
+      const response = await fetch(`/api/learning-artifacts?id=${encodeURIComponent(artifactId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orientation }),
+      });
+      if (!response.ok) {
+        console.warn('Không thể lưu hướng sơ đồ tư duy vào cơ sở dữ liệu.');
+      }
+    } catch (error) {
+      console.warn('Lỗi khi lưu hướng sơ đồ tư duy vào cơ sở dữ liệu:', error);
     }
   };
 
@@ -1928,7 +2282,7 @@ function CourseDetailContent() {
         id: `url-${Date.now()}`,
         name: title,
         type: 'LINK',
-        sizeOrPages: 'Liên kết web',
+        sizeOrPages: 'Cá nhân',
         url: cleanUrl,
         courseCode: activeCourse.code,
       };
@@ -2074,7 +2428,7 @@ function CourseDetailContent() {
       id: tempId,
       name: cleanTitle,
       type: 'LINK',
-      sizeOrPages: 'Liên kết web · Cá nhân',
+      sizeOrPages: 'Cá nhân',
       url: cleanUrl,
       courseCode: activeCourse.code,
     };
@@ -2123,10 +2477,17 @@ function CourseDetailContent() {
         onCloseNotifications={() => setNotifications(false)}
         notificationPermission={notificationPermission}
         onRequestNotificationPermission={undefined}
-        deadlines={moodle?.deadlines}
         user={user}
         displayName={displayName}
         onOpenProfile={() => setProfile(true)}
+        onOpenNotification={(notif) => {
+          setNotifications(false);
+          if (notif.url) {
+            window.open(notif.url, '_blank');
+          } else {
+            router.push('/home');
+          }
+        }}
       />
 
       {/* Main content */}
@@ -2233,26 +2594,62 @@ function CourseDetailContent() {
                               <span className={`file-badge ${isStudentSource(item) ? (item.type === 'LINK' ? 'link-badge' : 'student-file-badge') : badge.className}`}>
                                 {isStudentSource(item) ? (item.type === 'LINK' ? <Globe size={13} /> : <FileText size={13} />) : badge.label}
                               </span>
-                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', fontSize: isStudentSource(item) ? '11px' : undefined, lineHeight: isStudentSource(item) ? 1.3 : undefined }}>
+                              <span
+                                className="source-item-text"
+                                style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '2px',
+                                  overflow: 'hidden',
+                                  minWidth: 0,
+                                  flex: '1 1 auto',
+                                  fontSize: isStudentSource(item) ? '11px' : undefined,
+                                  lineHeight: isStudentSource(item) ? 1.3 : undefined,
+                                }}
+                              >
                                 {item.url ? (
                                   <a
                                     href={item.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     onClick={e => e.stopPropagation()}
-                                    style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: isStudentSource(item) ? '11px' : undefined }}
+                                    style={{
+                                      color: 'inherit',
+                                      textDecoration: 'none',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      fontSize: isStudentSource(item) ? '11px' : undefined,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}
                                     title="Mở tài liệu gốc"
                                   >
-                                    <span>{item.name}</span>
-                                    <ExternalLink size={12} style={{ opacity: 0.7 }} />
+                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
+                                    <ExternalLink size={12} style={{ opacity: 0.7, flexShrink: 0 }} />
                                   </a>
                                 ) : (
-                                  item.name
+                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
                                 )}
                                 {!isStudentSource(item) ? (
-                                  <small>{item.type === 'LINK' ? 'Liên kết Web' : item.type}</small>
+                                  <small style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {item.type === 'LINK' ? 'Liên kết Web' : item.type}
+                                  </small>
                                 ) : (
-                                  <small>{item.type === 'LINK' ? 'Liên kết Web · Cá nhân' : (item.sizeOrPages || 'Tài liệu cá nhân')}</small>
+                                  <small
+                                    style={{
+                                      display: 'block',
+                                      whiteSpace: 'nowrap',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      color: '#94a3b8',
+                                    }}
+                                  >
+                                    {item.type === 'LINK'
+                                      ? 'Cá nhân'
+                                      : (item.sizeOrPages?.replace(/Liên kết [wW]eb\s*[·•-]?\s*/gi, '').trim() || 'Tài liệu cá nhân')}
+                                  </small>
                                 )}
                               </span>
                               {isStudentSource(item) && (
@@ -2309,17 +2706,30 @@ function CourseDetailContent() {
                     { id: 'Flashcard', label: 'Flashcard', icon: <Layers size={14} /> },
                     { id: 'Slide', label: 'Slide', icon: <Layout size={14} /> },
                     { id: 'Trắc nghiệm', label: 'Trắc nghiệm', icon: <HelpCircle size={14} /> },
-                  ].map(tab => (
-                    <button
-                      key={tab.id}
-                      className={tool === tab.id ? 'selected' : ''}
-                      onClick={() => void openTool(tab.id)}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                    >
-                      {tab.icon}
-                      <span>{tab.label}</span>
-                    </button>
-                  ))}
+                  ].map(tab => {
+                    const artifactCount = (artifactsMap[tab.id] || []).length;
+                    return (
+                      <button
+                        key={tab.id}
+                        className={tool === tab.id ? 'selected' : ''}
+                        onClick={() => void openTool(tab.id)}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                        title={
+                          artifactCount > 0
+                            ? `${tab.label} (${artifactCount} học liệu đã tạo${tool === tab.id ? ' · Nhấn để ẩn/hiện danh sách' : ''})`
+                            : tab.label
+                        }
+                      >
+                        {tab.icon}
+                        <span>{tab.label}</span>
+                        {artifactCount > 0 && (
+                          <span className="tab-artifact-count-badge">
+                            {artifactCount}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 <div className="tool-tabs-actions">
@@ -2397,115 +2807,198 @@ function CourseDetailContent() {
               {tool === 'Chat' ? (
                 <>
                   <div className="messages">
-                    {chat.map((m, i) => (
-                      <div className={`message ${m.role}`} key={i}>
-                        {m.role === 'ai' && (
-                          <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            <Sparkles size={16} />
-                          </span>
-                        )}
-                        <div id={`chat-msg-${i}`} style={{ minWidth: 0, width: '100%' }}>
-                          <MarkdownRenderer
-                            content={m.text}
-                            onAddMaterial={handleAddExternalLinkToPersonalMaterial}
-                            savedUrls={savedUrls}
-                          />
-                          {(() => {
-                            if (!m.sources || m.sources.length === 0) return null;
-                            const externalSources = m.sources.filter(s => {
-                              if (typeof s === 'object' && s !== null) return Boolean(s.isExternal);
-                              const str = String(s);
-                              return str.includes('➕') || str.toLowerCase().includes('mở rộng') || str.toLowerCase().includes('kiểm chứng') || str.toLowerCase().includes('external');
-                            });
+                    {chat.map((m, i) => {
+                      if (m.role === 'ai' && !m.text.trim() && (!m.sources || m.sources.length === 0)) {
+                        return null;
+                      }
+                      return (
+                        <div className={`message ${m.role}`} key={i}>
+                          {m.role === 'ai' && (
+                            <span className="bot-avatar">
+                              <Sparkles size={16} />
+                            </span>
+                          )}
+                          <div id={`chat-msg-${i}`} style={{ minWidth: 0, width: '100%' }}>
+                            <MarkdownRenderer
+                              content={m.text}
+                              onAddMaterial={handleAddExternalLinkToPersonalMaterial}
+                              savedUrls={savedUrls}
+                            />
+                            {(() => {
+                              if (!m.sources || m.sources.length === 0) return null;
+                              const externalSources = m.sources.filter(s => {
+                                if (typeof s === 'object' && s !== null) return Boolean(s.isExternal);
+                                const str = String(s);
+                                return str.includes('➕') || str.toLowerCase().includes('mở rộng') || str.toLowerCase().includes('kiểm chứng') || str.toLowerCase().includes('external');
+                              });
 
-                            if (externalSources.length === 0) return null;
+                              if (externalSources.length === 0) return null;
 
-                            return (
-                              <div className="citations">
-                                {externalSources.map((s, idx) => {
-                                  const isObj = typeof s === 'object' && s !== null;
-                                  const rawName = isObj ? s.name : String(s);
-                                  const cleanName = rawName.replace(/^(▤|➕|\+\s*|\[Mở rộng\])/, '').trim();
-                                  const searchTarget = cleanName.replace(/^(Kiểm chứng|Nguồn mở rộng):\s*/i, '');
-                                  const url = isObj && s.url ? s.url : `https://www.google.com/search?q=${encodeURIComponent(searchTarget)}`;
-                                  const cleanNorm = url.trim().toLowerCase().replace(/\/+$/, '');
-                                  const isSaved = Boolean(
-                                    savedUrls.some(u => {
-                                      const norm = u.trim().toLowerCase().replace(/\/+$/, '');
-                                      return norm === cleanNorm || cleanNorm.startsWith(norm) || norm.startsWith(cleanNorm);
-                                    })
-                                  );
+                              return (
+                                <div className="citations">
+                                  {externalSources.map((s, idx) => {
+                                    const isObj = typeof s === 'object' && s !== null;
+                                    const rawName = isObj ? s.name : String(s);
+                                    const cleanName = rawName.replace(/^(▤|➕|\+\s*|\[Mở rộng\])/, '').trim();
+                                    const searchTarget = cleanName.replace(/^(Kiểm chứng|Nguồn mở rộng):\s*/i, '');
+                                    const url = isObj && s.url ? s.url : `https://www.google.com/search?q=${encodeURIComponent(searchTarget)}`;
+                                    const cleanNorm = url.trim().toLowerCase().replace(/\/+$/, '');
+                                    const isSaved = Boolean(
+                                      savedUrls.some(u => {
+                                        const norm = u.trim().toLowerCase().replace(/\/+$/, '');
+                                        return norm === cleanNorm || cleanNorm.startsWith(norm) || norm.startsWith(cleanNorm);
+                                      })
+                                    );
+
+                                    return (
+                                      <div key={`${cleanName}-${idx}`} className="citation-pill-merged">
+                                        <a
+                                          className="citation-link"
+                                          href={url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          title={`Mở nguồn ngoài đối chiếu & kiểm chứng: ${url}`}
+                                        >
+                                          <Globe size={12} style={{ color: '#38bdf8', flexShrink: 0 }} />
+                                          <span className="citation-text">{cleanName}</span>
+                                          <ExternalLink size={10} style={{ opacity: 0.7, flexShrink: 0 }} />
+                                        </a>
+                                        <span className="citation-divider" />
+                                        <button
+                                          type="button"
+                                          onClick={() => handleAddExternalLinkToPersonalMaterial({ title: cleanName, url })}
+                                          disabled={isSaved}
+                                          className={`citation-action-btn ${isSaved ? 'saved' : ''}`}
+                                          title={isSaved ? 'Đã có trong tài liệu môn học' : `Thêm "${cleanName}" vào tài liệu cá nhân`}
+                                        >
+                                          {isSaved ? (
+                                            <>
+                                              <Check size={11} style={{ flexShrink: 0 }} />
+                                              <span>Đã lưu</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <span>+</span>
+                                            </>
+                                          )}
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()}
+
+                            {/* Toolbar for AI message - ONLY show when response is complete and has text */}
+                            {m.role === 'ai' && m.text.trim().length > 0 && !(loading && i === chat.length - 1) && (
+                              <div
+                                className="message-toolbar"
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  gap: '8px',
+                                  width: '100%',
+                                }}
+                              >
+                                {/* Left side of AI's response: Model name badge */}
+                                {m.model ? (() => {
+                                  const displayModel = m.model.toLowerCase().includes('datacurso')
+                                    ? 'Groq GPT-OSS 120B'
+                                    : m.model;
+                                  const isCohere = displayModel.toLowerCase().includes('cohere');
+                                  const isGemini = displayModel.toLowerCase().includes('gemini');
+                                  const isGroq = displayModel.toLowerCase().includes('groq');
+                                  const isHorde = displayModel.toLowerCase().includes('horde');
+                                  const isCache = displayModel.toLowerCase().includes('cache') || displayModel.toLowerCase().includes('bộ nhớ đệm');
 
                                   return (
-                                    <div key={`${cleanName}-${idx}`} className="citation-pill-merged">
-                                      <a
-                                        className="citation-link"
-                                        href={url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        title={`Mở nguồn ngoài đối chiếu & kiểm chứng: ${url}`}
-                                      >
-                                        <Globe size={12} style={{ color: '#38bdf8', flexShrink: 0 }} />
-                                        <span className="citation-text">{cleanName}</span>
-                                        <ExternalLink size={10} style={{ opacity: 0.7, flexShrink: 0 }} />
-                                      </a>
-                                      <span className="citation-divider" />
-                                      <button
-                                        type="button"
-                                        onClick={() => handleAddExternalLinkToPersonalMaterial({ title: cleanName, url })}
-                                        disabled={isSaved}
-                                        className={`citation-action-btn ${isSaved ? 'saved' : ''}`}
-                                        title={isSaved ? 'Đã có trong tài liệu môn học' : `Thêm "${cleanName}" vào tài liệu cá nhân`}
-                                      >
-                                        {isSaved ? (
-                                          <>
-                                            <Check size={11} style={{ flexShrink: 0 }} />
-                                            <span>Đã lưu</span>
-                                          </>
-                                        ) : (
-                                          <>
-                                            <span>+</span>
-                                          </>
-                                        )}
-                                      </button>
+                                    <div
+                                      className="ai-model-tag-left"
+                                      title={`Mô hình phản hồi: ${displayModel}`}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        fontSize: '11px',
+                                        fontWeight: 600,
+                                        padding: '3px 8px',
+                                        borderRadius: '6px',
+                                        background: isCohere
+                                          ? 'rgba(244, 63, 94, 0.16)'
+                                          : isGemini
+                                          ? 'rgba(168, 85, 247, 0.16)'
+                                          : isGroq
+                                          ? 'rgba(249, 115, 22, 0.14)'
+                                          : isHorde
+                                          ? 'rgba(6, 182, 212, 0.16)'
+                                          : isCache
+                                          ? 'rgba(16, 185, 129, 0.16)'
+                                          : 'rgba(56, 189, 248, 0.16)',
+                                        color: isCohere
+                                          ? '#fb7185'
+                                          : isGemini
+                                          ? '#c084fc'
+                                          : isGroq
+                                          ? '#fb923c'
+                                          : isHorde
+                                          ? '#22d3ee'
+                                          : isCache
+                                          ? '#34d399'
+                                          : '#38bdf8',
+                                        border: `1px solid ${
+                                          isCohere
+                                            ? 'rgba(244, 63, 94, 0.35)'
+                                            : isGemini
+                                            ? 'rgba(168, 85, 247, 0.35)'
+                                            : isGroq
+                                            ? 'rgba(249, 115, 22, 0.35)'
+                                            : isHorde
+                                            ? 'rgba(6, 182, 212, 0.35)'
+                                            : isCache
+                                            ? 'rgba(16, 185, 129, 0.35)'
+                                            : 'rgba(56, 189, 248, 0.35)'
+                                        }`,
+                                        userSelect: 'none',
+                                      }}
+                                    >
+                                      <Sparkles size={11} style={{ opacity: 0.85 }} />
+                                      <span>{displayModel}</span>
                                     </div>
                                   );
-                                })}
-                              </div>
-                            );
-                          })()}
+                                })() : (
+                                  <div />
+                                )}
 
-                          {/* Copy button for AI message */}
-                          {m.role === 'ai' && (
-                            <div className="message-toolbar">
-                              <button
-                                type="button"
-                                className={`copy-message-btn ${copiedIndex === i ? 'copied' : ''}`}
-                                onClick={async () => {
-                                  const el = document.getElementById(`chat-msg-${i}`);
-                                  if (el) {
-                                    await copyRichHtmlForWord(el, m.text);
-                                  } else {
-                                    await navigator.clipboard.writeText(m.text);
-                                  }
-                                  setCopiedIndex(i);
-                                  notify('Đã sao chép nội dung câu trả lời');
-                                  window.setTimeout(() => {
-                                    setCopiedIndex(prev => (prev === i ? null : prev));
-                                  }, 2000);
-                                }}
-                                title="Sao chép câu trả lời (hỗ trợ dán vào Word hoặc Markdown)"
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-                              >
-                                {copiedIndex === i ? <Check size={13} /> : <Copy size={13} />}
-                                <span>{copiedIndex === i ? 'Đã sao chép' : 'Sao chép'}</span>
-                              </button>
-                            </div>
-                          )}
+                                <button
+                                  type="button"
+                                  className={`copy-message-btn ${copiedIndex === i ? 'copied' : ''}`}
+                                  onClick={async () => {
+                                    const el = document.getElementById(`chat-msg-${i}`);
+                                    if (el) {
+                                      await copyRichHtmlForWord(el, m.text);
+                                    } else {
+                                      await navigator.clipboard.writeText(m.text);
+                                    }
+                                    setCopiedIndex(i);
+                                    notify('Đã sao chép nội dung câu trả lời');
+                                    window.setTimeout(() => {
+                                      setCopiedIndex(prev => (prev === i ? null : prev));
+                                    }, 2000);
+                                  }}
+                                  title="Sao chép câu trả lời (hỗ trợ dán vào Word hoặc Markdown)"
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                                >
+                                  {copiedIndex === i ? <Check size={13} /> : <Copy size={13} />}
+                                  <span>{copiedIndex === i ? 'Đã sao chép' : 'Sao chép'}</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                    {loading && (
+                      );
+                    })}
+                    {loading && chat[chat.length - 1]?.role !== 'ai' && (
                       <div className="message ai">
                         <span className="bot-avatar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                           <Sparkles size={16} />
@@ -2803,6 +3296,7 @@ function CourseDetailContent() {
                         selectedSourcesCount={selectedSourceNames.length}
                         onGenerate={(level, customTopic, ext) => void generateToolArtifact(tool, level, customTopic, ext)}
                         onReset={() => resetToolArtifact(tool)}
+                        onOrientationChange={(artifactId, orientation) => void updateToolArtifactOrientation(tool, artifactId, orientation)}
                         onStop={stopArtifactGeneration}
                         copyText={copyText}
                         notify={notify}
@@ -2962,7 +3456,7 @@ function CourseDetailContent() {
                       textOverflow: 'ellipsis',
                     }}
                   >
-                    {activeCourse.name} {activeCourse.code ? `(${activeCourse.code})` : ''}
+                    {activeCourse.name} {activeCourse.code ? `(${activeCourse.code.toUpperCase()})` : ''}
                   </p>
                 </div>
               </div>
@@ -3055,7 +3549,7 @@ function CourseDetailContent() {
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
                         <span style={{ fontSize: '11.5px', color: '#94a3b8', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <Calendar size={12} />
+                          <CalendarDays size={12} />
                           {res.gradedAt
                             ? new Date(res.gradedAt).toLocaleDateString('vi-VN', {
                                 day: '2-digit',
@@ -3067,26 +3561,6 @@ function CourseDetailContent() {
                         <span className={`result-status-tag ${res.passed ? 'pass' : 'fail'}`}>
                           {res.passed ? 'Đạt' : 'Cần cải thiện'}
                         </span>
-                        {(() => {
-                          const isAnalyzed = !!res.attemptId && analyzedAttemptIds.has(Number(res.attemptId));
-                          const route = resolveGradeRoute(res, isAnalyzed);
-                          return (
-                            <span
-                              style={{
-                                fontSize: '11px',
-                                padding: '2px 8px',
-                                borderRadius: '7px',
-                                background: `${route.badgeColor}22`,
-                                color: route.badgeColor,
-                                border: `1px solid ${route.badgeColor}55`,
-                                fontWeight: 600,
-                              }}
-                              title={route.buttonTooltip}
-                            >
-                              {route.badgeText}
-                            </span>
-                          );
-                        })()}
                       </div>
                     </div>
 
@@ -3108,7 +3582,7 @@ function CourseDetailContent() {
                         </div>
                       </div>
 
-                      <div className="result-progress-track" style={{ height: '5px' }}>
+                      <div className="result-progress-track" style={{ height: '4px' }}>
                         <div
                           className={`result-progress-bar ${res.passed ? 'pass' : 'fail'}`}
                           style={{
@@ -3122,14 +3596,14 @@ function CourseDetailContent() {
                     {res.feedback ? (
                       <div
                         style={{
-                          padding: '0.75rem 0.95rem',
+                          padding: '0.65rem 0.85rem',
                           borderRadius: '10px',
                           background:
                             'linear-gradient(135deg, rgba(124, 109, 242, 0.12), rgba(90, 73, 215, 0.08))',
                           border: '1px solid rgba(124, 109, 242, 0.28)',
                           display: 'flex',
                           flexDirection: 'column',
-                          gap: '0.3rem',
+                          gap: '0.25rem',
                         }}
                       >
                         <span
@@ -3173,7 +3647,10 @@ function CourseDetailContent() {
                           color: '#94a3b8',
                         }}
                       >
-                        <span style={{ fontWeight: 600, color: '#a5b4fc' }}>Nhận xét:</span>
+                        <span style={{ fontWeight: 600, color: '#a5b4fc', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                          <MessageSquare size={13} style={{ flexShrink: 0 }} />
+                          <span>Nhận xét:</span>
+                        </span>
                         <span style={{ color: '#cbd5e1', fontWeight: 600 }}>Chưa có nhận xét riêng</span>
                       </div>
                     )}
@@ -4115,23 +4592,50 @@ function CourseDetailContent() {
       {/* Quiz Analysis Diagnosis Modal */}
       <QuizAnalysisModal
         isOpen={analysisModalOpen}
-        onClose={() => setAnalysisModalOpen(false)}
+        onClose={() => {
+          if (analysisLoading) {
+            handleStopQuizAnalysis();
+          } else {
+            setAnalysisError(null);
+          }
+          setAnalysisModalOpen(false);
+        }}
+        onStop={handleStopQuizAnalysis}
         analysis={currentAnalysis}
         loading={analysisLoading}
+        loadingStage={analysisLoadingStage}
+        examName={selectedExamResult?.name || currentAnalysis?.quizName}
+        courseName={selectedExamResult?.courseName || currentAnalysis?.courseName || activeCourse?.name}
         error={analysisError}
         onRetry={() => selectedExamResult && handleAskAiAboutGrade(selectedExamResult, false)}
         onReanalyze={() => selectedExamResult && handleAskAiAboutGrade(selectedExamResult, true)}
         onDelete={async () => {
-          if (!currentAnalysis?.id) return;
+          if (!currentAnalysis?.id && !currentAnalysis?.attemptId) return;
           const userId = user?.id || 4;
-          const response = await fetch(
-            `/api/learning-artifacts?id=${encodeURIComponent(currentAnalysis.id)}&userId=${userId}&artifactType=quiz_analysis`,
-            { method: 'DELETE' },
-          );
+          const attemptIdToDelete = currentAnalysis.attemptId ? Number(currentAnalysis.attemptId) : null;
+          const queryParams = new URLSearchParams({
+            userId: String(userId),
+            artifactType: 'quiz_analysis',
+          });
+          if (currentAnalysis.id) queryParams.set('id', currentAnalysis.id);
+          if (attemptIdToDelete) queryParams.set('attemptId', String(attemptIdToDelete));
+
+          const response = await fetch(`/api/learning-artifacts?${queryParams.toString()}`, {
+            method: 'DELETE',
+          });
           const data = (await response.json()) as { error?: string };
           if (!response.ok) throw new Error(data.error || 'Không thể xóa bản phân tích.');
-          removeStoredAnalysis(currentAnalysis.attemptId);
+
+          if (attemptIdToDelete) {
+            removeStoredAnalysis(attemptIdToDelete);
+            setAnalyzedAttemptIds(prev => {
+              const next = new Set(prev);
+              next.delete(attemptIdToDelete);
+              return next;
+            });
+          }
           setCurrentAnalysis(null);
+          setSelectedExamResult(null);
           setAnalysisModalOpen(false);
         }}
         onStartRemediation={topics => {

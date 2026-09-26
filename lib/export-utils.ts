@@ -1,10 +1,12 @@
 import { Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx';
 import { toPng } from 'html-to-image';
+import { cleanSummaryData } from '@/lib/summary-cleaner';
 
 export async function exportSummaryToDocx(
-  summary: { title: string; overview: string; points: string[] },
+  rawSummary: { title: string; overview: string; points: string[] },
   courseTitle: string
 ) {
+  const summary = cleanSummaryData(rawSummary);
   const doc = new Document({
     sections: [
       {

@@ -16,6 +16,7 @@ function sanitizeQuestionsAnalysis(questions: any[]) {
     ...q,
     studentAnswer: cleanAnswerText(q.studentAnswer),
     rightAnswer: cleanAnswerText(q.rightAnswer),
+    explanation: q.explanation || q.feedback || '',
   }));
 }
 
@@ -260,7 +261,7 @@ export async function POST(request: Request) {
 - Câu hỏi: ${m.questionText}
 - Sinh viên chọn: ${m.studentAnswer}
 - Đáp án đúng: ${m.rightAnswer}
-- Phản hồi từ đề: ${m.feedback || 'Không có'}`
+${m.explanation || m.feedback ? `- Lời giải / Giải thích từ đề thi: ${m.explanation || m.feedback}` : '- Lời giải từ đề: Chưa có'}`
       )
       .join('\n\n');
 
@@ -268,11 +269,11 @@ export async function POST(request: Request) {
     const hasFeedback = Boolean(rawFeedback && rawFeedback !== '-' && rawFeedback !== 'Chưa có nhận xét');
 
     const strategyInstruction = hasFeedback
-      ? `CHIẾN LƯỢC ĐỊNH TUYẾN NGỮ CẢNH: TOÀN TRI (FULL INSIGHT)
+      ? `CHIẾN LƯỢC ĐỊNH TUYẾN NGỮ CẢNH: KẾT HỢP NHẬN XÉT GIẢNG VIÊN (FULL INSIGHT)
 - Lời phê chính thức của Giảng viên: "${rawFeedback}".
 - Hãy dùng lời phê này làm "kim chỉ nam" mục tiêu.
 - Kết hợp bóc tách chi tiết từng câu làm sai làm minh chứng thực tế để vạch lộ trình khắc phục chính xác nhất.`
-      : `CHIẾN LƯỢC ĐỊNH TUYẾN NGỮ CẢNH: PHÂN TÍCH KỸ THUẬT (TECHNICAL ANALYSIS)
+      : `CHIẾN LƯỢC ĐỊNH TUYẾN NGỮ CẢNH: PHÂN TÍCH THEO DỮ LIỆU ĐỀ THI
 - Bài thi không có lời phê riêng từ giảng viên.
 - Tự động phân nhóm các câu chọn sai, đối chiếu với tài liệu gốc môn học để tự tìm ra các lỗ hổng khái niệm cốt lõi.`;
 
@@ -299,7 +300,7 @@ YÊU CẦU PHÂN TÍCH:
 3. Đưa ra "recommendations": Mảng các hành động cụ thể sinh viên cần thực hiện ngay (ví dụ: các chương tài liệu cần đọc lại, bài tập cần làm).
 4. Phân tích chi tiết từng câu trong "questionsAnalysis":
    - "slot": số thứ tự câu hỏi
-   - "diagnosedReason": Phân tích ngắn gọn tại sao sinh viên lại chọn sai (ngộ nhận khái niệm, nhầm lẫn giữa các công nghệ, hay chọn thiếu phương án), và lời khuyên khắc phục cốt lõi.
+   - "diagnosedReason": Phân tích ngắn gọn tại sao sinh viên lại chọn sai (ngộ nhận khái niệm, nhầm lẫn giữa các nội dung, hay chọn thiếu phương án) và lời khuyên khắc phục cốt lõi. NẾU CÂU HỎI ĐÃ CÓ "Lời giải / Giải thích từ đề thi", HÃY BÁM SÁT VÀO ĐÓ ĐỂ CHỈ RÕ ĐIỂM MÙ TƯ DUY, TUYỆT ĐỐI KHÔNG SUY ĐOÁN LAN MAN NGOÀI LỀ.
 
 ĐỊNH DẠNG TRẢ VỀ:
 Bắt buộc trả về đúng duy nhất 1 JSON object theo cấu trúc:
@@ -330,6 +331,7 @@ Không kèm markdown hay văn bản ngoài JSON.`;
         userPrompt: prompt,
         temperature: 0.2,
         jsonMode: true,
+        signal: request.signal,
       });
 
       if (aiResult.text) {
@@ -377,6 +379,7 @@ Không kèm markdown hay văn bản ngoài JSON.`;
       overview: aiResponse.overview,
       questionsAnalysis: parsedMistakes.map(m => {
         const aiDiag = aiResponse.questionsAnalysis.find(a => a.slot === m.slot);
+        const explanation = m.explanation || m.feedback || '';
         return {
           slot: m.slot,
           questionText: m.questionText,
@@ -385,8 +388,9 @@ Không kèm markdown hay văn bản ngoài JSON.`;
           status: m.status,
           mark: m.mark ? String(Math.round(parseFloat(m.mark) * 10) / 10) : m.mark,
           maxmark: m.maxmark !== undefined ? Math.round(m.maxmark * 10) / 10 : m.maxmark,
-          feedback: m.feedback,
-          diagnosedReason: aiDiag?.diagnosedReason || m.feedback || '',
+          feedback: explanation,
+          explanation: explanation,
+          diagnosedReason: aiDiag?.diagnosedReason || explanation || '',
         };
       }),
       analyzedAt: new Date().toISOString(),

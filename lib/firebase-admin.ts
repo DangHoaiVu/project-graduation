@@ -136,9 +136,19 @@ export async function getFirebaseRow(collectionName: string, id: string): Promis
   return response ? decodeDocument(response) : null;
 }
 
-export async function setFirebaseRow(collectionName: string, id: string, data: Record<string, unknown>): Promise<FirebaseRow | null> {
-  const url = getDocumentUrl(collectionName, id);
+export async function setFirebaseRow(
+  collectionName: string,
+  id: string,
+  data: Record<string, unknown>,
+  updateFields?: string[]
+): Promise<FirebaseRow | null> {
+  let url = getDocumentUrl(collectionName, id);
   if (!url) return null;
+  if (updateFields && updateFields.length > 0) {
+    const params = new URLSearchParams();
+    updateFields.forEach(f => params.append('updateMask.fieldPaths', f));
+    url = `${url}?${params.toString()}`;
+  }
   await firestoreRequest(url, {
     method: 'PATCH',
     body: JSON.stringify({ fields: Object.fromEntries(Object.entries(data).map(([key, value]) => [key, encodeValue(value)])) }),
@@ -152,3 +162,176 @@ export async function deleteFirebaseRow(collectionName: string, id: string) {
   await firestoreRequest(url, { method: 'DELETE' });
   return true;
 }
+
+// Firebase Cloud Messaging (FCM) via Google HTTP v1 REST API
+// Bypasses Node.js http2.connect to be 100% compatible with Vinext, Cloudflare Workers & Edge runtimes.
+
+let fcmAccessToken: { value: string; expiresAt: number } | null = null;
+
+async function getFcmOAuthAccessToken(): Promise<string | null> {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  let privateKey = process.env.FIREBASE_PRIVATE_KEY || '';
+  if ((privateKey.startsWith('"') && privateKey.endsWith('"')) || (privateKey.startsWith("'") && privateKey.endsWith("'"))) {
+    privateKey = privateKey.slice(1, -1);
+  }
+  privateKey = privateKey.replace(/\\n/g, '\n');
+
+  if (!projectId || !clientEmail || !privateKey) return null;
+
+  if (fcmAccessToken && fcmAccessToken.expiresAt > Date.now() + 60_000) {
+    return fcmAccessToken.value;
+  }
+
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const header = encodeBase64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const payload = encodeBase64Url(
+    JSON.stringify({
+      iss: clientEmail,
+      scope: 'https://www.googleapis.com/auth/firebase.messaging',
+      aud: 'https://oauth2.googleapis.com/token',
+      iat: issuedAt,
+      exp: issuedAt + 3600,
+    })
+  );
+
+  const pem = privateKey.replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g, '');
+  const key = await crypto.subtle.importKey(
+    'pkcs8',
+    Uint8Array.from(atob(pem), char => char.charCodeAt(0)),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+
+  const signature = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    key,
+    new TextEncoder().encode(`${header}.${payload}`)
+  );
+
+  const assertion = `${header}.${payload}.${encodeBase64Url(signature)}`;
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`FCM OAuth authentication failed (${response.status}): ${errorText}`);
+  }
+
+  const tokenData = (await response.json()) as { access_token?: string; expires_in?: number };
+  if (!tokenData.access_token) {
+    throw new Error('FCM OAuth returned no access token');
+  }
+
+  fcmAccessToken = {
+    value: tokenData.access_token,
+    expiresAt: Date.now() + (tokenData.expires_in || 3600) * 1000,
+  };
+  return fcmAccessToken.value;
+}
+
+export interface MulticastPayload {
+  notification: {
+    title: string;
+    body: string;
+  };
+  data?: Record<string, string>;
+  tokens: string[];
+}
+
+export interface MulticastResponse {
+  responses: Array<{
+    success: boolean;
+    messageId?: string;
+    error?: { message?: string };
+  }>;
+  successCount: number;
+  failureCount: number;
+}
+
+export async function sendFcmEachForMulticast(payload: MulticastPayload): Promise<MulticastResponse> {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  if (!projectId) {
+    throw new Error('FIREBASE_PROJECT_ID is not configured');
+  }
+
+  const accessToken = await getFcmOAuthAccessToken();
+  if (!accessToken) {
+    throw new Error('Could not obtain FCM OAuth access token');
+  }
+
+  const tokens = payload.tokens || [];
+  const results: MulticastResponse['responses'] = [];
+  let successCount = 0;
+  let failureCount = 0;
+
+  await Promise.allSettled(
+    tokens.map(async token => {
+      try {
+        const eventTag = payload.data?.tag || 'lms-assistant-notification';
+        const bodyPayload = {
+          message: {
+            token,
+            notification: {
+              title: payload.notification.title,
+              body: payload.notification.body,
+            },
+            data: payload.data || {},
+            webpush: {
+              notification: {
+                title: payload.notification.title,
+                body: payload.notification.body,
+                icon: '/lms-assistant-icon.png',
+                badge: '/lms-assistant-icon.png',
+                tag: eventTag,
+                renotify: true,
+                require_interaction: true,
+              },
+              fcm_options: {
+                link: payload.data?.url || '/home',
+              },
+            },
+          },
+        };
+
+        const res = await fetch(`https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(bodyPayload),
+        });
+
+        const data = (await res.json()) as { name?: string; error?: { message?: string } };
+        if (res.ok) {
+          successCount++;
+          results.push({ success: true, messageId: data.name });
+        } else {
+          failureCount++;
+          results.push({ success: false, error: { message: data.error?.message || `HTTP ${res.status}` } });
+        }
+      } catch (err) {
+        failureCount++;
+        results.push({ success: false, error: { message: err instanceof Error ? err.message : String(err) } });
+      }
+    })
+  );
+
+  return {
+    successCount,
+    failureCount,
+    responses: results,
+  };
+}
+
+export const adminMessaging = {
+  sendEachForMulticast: sendFcmEachForMulticast,
+};

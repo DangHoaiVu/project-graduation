@@ -18,6 +18,12 @@ export async function registerNotificationServiceWorker(): Promise<ServiceWorker
     const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
       scope: '/',
     });
+    // Check and apply service worker updates immediately
+    try {
+      await registration.update();
+    } catch {
+      // ignore
+    }
     return registration;
   } catch (err) {
     console.warn('[Notification] Failed to register service worker:', err);
@@ -49,8 +55,17 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
   }
 }
 
-export async function registerFcmToken(userId: number): Promise<string | null> {
-  if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') {
+export async function registerFcmToken(userId: number, promptIfNeeded = false): Promise<string | null> {
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return null;
+  }
+
+  let perm = Notification.permission;
+  if (perm !== 'granted' && promptIfNeeded) {
+    perm = await requestNotificationPermission();
+  }
+
+  if (perm !== 'granted') {
     return null;
   }
 
@@ -87,6 +102,26 @@ export async function registerFcmToken(userId: number): Promise<string | null> {
     console.warn('[Notification] Failed to register FCM token:', err);
     return null;
   }
+}
+
+export async function unregisterFcmToken(userId?: number): Promise<boolean> {
+  if (typeof window === 'undefined') return false;
+
+  const token = localStorage.getItem('fcmToken') || undefined;
+  const deviceId = getDeviceId();
+
+  try {
+    await fetch('/api/fcm', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, token, deviceId }),
+    });
+  } catch (err) {
+    console.warn('[Notification] Failed to delete FCM token on logout:', err);
+  } finally {
+    localStorage.removeItem('fcmToken');
+  }
+  return true;
 }
 
 export async function dismissLocalNotificationByTag(tag: string): Promise<boolean> {

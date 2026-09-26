@@ -27,7 +27,16 @@ export function MarkdownRenderer({ content, onAddMaterial, savedUrls = [] }: Mar
     // 4. Ensure space after closing bold/code if needed
     .replace(/\*\*([^*]+)\*\*/g, '**$1**')
     // 5. Convert backtick-wrapped URLs into markdown links so they are rendered as interactive links
-    .replace(/`\s*(https?:\/\/[^\s`]+)\s*`/g, '[$1]($1)');
+    .replace(/`\s*(https?:\/\/[^\s`]+)\s*`/g, '[$1]($1)')
+    // 6. Transform citation tags (both verbose like '[HỌC LIỆU ĐÃ LƯU 2]', '[trích đoạn 5]' and concise like ' [1]', ' [2, 3]') into interactive Perplexity-style citation pill badges in a single pass
+    .replace(/(?:\[(?:(?:học\s*liệu|tài\s*liệu)(?:\s*đã\s*lưu)?|trích\s*đoạn|đoạn\s*trích|trích|nguồn|giáo\s*trình|bài\s*giảng|cite:?)\s*\[?(\d+(?:\s*,\s*\d+)*)\]?\]|(?<=^|[\s,.:;!?)])\[(\d+(?:\s*,\s*\d+)*)\](?!\())/gi, (_match, verboseNums, conciseNums) => {
+      const nums = verboseNums || conciseNums;
+      if (!nums) return _match;
+      const cleanNums = nums.replace(/\s+/g, '');
+      return ` <span class="inline-citation-pill" title="Căn cứ tài liệu / học liệu tham khảo (${cleanNums})">[${cleanNums}]</span>`;
+    })
+    // 7. Deduplicate identical citation badges repeated in immediate succession
+    .replace(/(<span class="inline-citation-pill"[^>]*>\[\d+\]<\/span>)(?:\s*(?:<br\/?>|\n|\.)?\s*\1)+/g, '$1');
 
   // Convert raw backtick code blocks inside table rows into inline formatted text so they don't break markdown tables
   cleanContent = cleanContent.split('\n').map(line => {

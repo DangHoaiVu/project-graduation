@@ -1,12 +1,19 @@
 import { NextResponse } from 'next/server';
 import { generateText } from '@/models/registry';
-import { getDb } from '@/db';
-import { personalMaterials } from '@/db/schema';
-import { eq } from 'drizzle-orm';
 import { supabaseAdmin } from '@/lib/supabase';
 import { parseDocumentFromUrl } from '@/lib/document-parser';
-import { retrieveRelevantChunks, formatChunksForPrompt } from '@/lib/rag';
+import {
+  scoreAndSelectChunks,
+  formatChunksForPrompt,
+  chunkDocument,
+  type DocumentChunk,
+} from '@/lib/rag';
 import { getPersonalMaterials } from '@/lib/firebase-data';
+import {
+  getStoredCourseEmbeddings,
+  vectorizeAndStoreLmsSource,
+  getExistingCourseFileIds,
+} from '@/lib/supabase-vector';
 
 interface ChatHistoryItem {
   role: 'user' | 'ai' | 'model' | 'assistant';
@@ -14,9 +21,17 @@ interface ChatHistoryItem {
 }
 
 interface SourceItem {
+  id?: string;
   name: string;
   url?: string;
   type?: string;
+  fileId?: number;
+  moduleId?: number;
+  sectionId?: number;
+  sectionName?: string;
+  chapter?: string | number;
+  isStudentUpload?: boolean;
+  content?: string;
 }
 
 interface StudentScoreItem {
@@ -44,6 +59,12 @@ interface GradeColumnSummary {
   grademax: number;
 }
 
+interface UpcomingEventItem {
+  title: string;
+  due?: string;
+  type?: string;
+}
+
 export async function POST(request: Request) {
   try {
     const {
@@ -52,11 +73,12 @@ export async function POST(request: Request) {
       courseCode = '',
       courseId,
       sources = [],
+      sourceNames = [],
       history = [],
       model = 'auto',
       students,
       gradeColumns = [],
-      gradebookScores = {},
+      upcomingEvents = [],
       allowExternalSource = false,
       answerStyle = 'concise',
     } = (await request.json()) as {
@@ -65,11 +87,12 @@ export async function POST(request: Request) {
       courseCode?: string;
       courseId?: string | number;
       sources?: SourceItem[];
+      sourceNames?: string[];
       history?: ChatHistoryItem[];
       model?: string;
       students?: StudentItem[] | StudentSummary;
       gradeColumns?: GradeColumnSummary[];
-      gradebookScores?: Record<string, Record<string, number | string>>;
+      upcomingEvents?: UpcomingEventItem[];
       allowExternalSource?: boolean;
       answerStyle?: 'concise' | 'detailed';
     };
@@ -78,46 +101,105 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Câu hỏi không được để trống.' }, { status: 400 });
     }
 
-    // 1. Retrieve course documents for RAG grounding
-    let documentContext = '';
-    const db = getDb();
-    const docMap = new Map<string, string>();
-
     const moodleCourseId = Number(courseId) || undefined;
-    if (moodleCourseId) {
+    const effectiveSources = Array.isArray(sources) ? sources : [];
+    const effectiveSourceNames = Array.isArray(sourceNames) && sourceNames.length > 0
+      ? sourceNames
+      : effectiveSources.map(s => s.name);
+
+    // 1. Retrieve ONLY checked course documents for RAG grounding
+    let documentContext = '';
+    const docMap = new Map<string, string>();
+    const isStudentUploadSource = (src: SourceItem) =>
+      Boolean(
+        src.isStudentUpload ||
+        src.id?.startsWith('mat-') ||
+        src.id?.startsWith('upload-') ||
+        src.id?.startsWith('url-') ||
+        src.id?.startsWith('note-')
+      );
+
+    const checkedUploadSources = effectiveSources.filter(isStudentUploadSource);
+    const checkedLmsSources = effectiveSources.filter(s => !isStudentUploadSource(s));
+
+    // A. For checked LMS sources in Supabase pgvector:
+    let storedLmsChunks: DocumentChunk[] = [];
+    if (moodleCourseId && checkedLmsSources.length > 0) {
       try {
-        const mats = await getPersonalMaterials({ moodleCourseId, limit: 10 });
-        if (mats) {
-          for (const mat of mats) {
-            if (mat.storage_url && mat.title && !docMap.has(String(mat.title).toLowerCase())) {
+        const existingLmsFileIds = await getExistingCourseFileIds(moodleCourseId);
+        const lmsToIngest = checkedLmsSources.filter(src => {
+          const fid = Number(src.fileId || src.moduleId);
+          return fid && !existingLmsFileIds.has(fid);
+        });
+
+        if (lmsToIngest.length > 0) {
+          await Promise.allSettled(
+            lmsToIngest.map(async src => {
+              if (!src.url) return;
               try {
-                const text = await parseDocumentFromUrl(String(mat.storage_url), String(mat.title));
-                if (text && text.length > 50) docMap.set(String(mat.title).toLowerCase(), text);
-              } catch {
-                // ignore unavailable material
+                const extractedText = await parseDocumentFromUrl(src.url, src.name);
+                if (extractedText && extractedText.trim().length > 20) {
+                  const fid = Number(src.fileId || src.moduleId) || 1;
+                  await vectorizeAndStoreLmsSource({
+                    moodleCourseId,
+                    moodleFileId: fid,
+                    documentTitle: src.name,
+                    text: extractedText,
+                    metadata: {
+                      sectionId: src.sectionId,
+                      sectionName: src.sectionName,
+                      courseId: moodleCourseId,
+                      courseCode,
+                    },
+                  });
+                  docMap.set(src.name.toLowerCase(), extractedText);
+                }
+              } catch (parseErr) {
+                console.warn(`Could not vectorize LMS document ${src.name}:`, parseErr);
               }
-            }
-          }
+            })
+          );
         }
-      } catch (firebaseError) {
-        console.warn('Firebase materials query for teacher assistant:', firebaseError);
+
+        // Retrieve stored LMS vectors strictly for checked LMS sources
+        const lmsTitles = checkedLmsSources.map(s => s.name);
+        storedLmsChunks = await getStoredCourseEmbeddings(moodleCourseId, {
+          docTitles: lmsTitles,
+        });
+      } catch (lmsVecErr) {
+        console.warn('Teacher Assistant pgvector retrieval note:', lmsVecErr);
+      }
+    }
+
+    // B. For checked teacher/user uploaded files or notes:
+    // Only search materials matching the checked sources list!
+    if (checkedUploadSources.length > 0) {
+      // 1. Direct content if passed
+      for (const src of checkedUploadSources) {
+        if (src.content && src.content.trim()) {
+          docMap.set(src.name.toLowerCase(), src.content.trim());
+        }
       }
 
-      if (supabaseAdmin) {
+      // 2. Query Firebase personal materials ONLY for matching checked sources
+      if (moodleCourseId) {
         try {
-          const { data: mats } = await supabaseAdmin
-            .from('personal_materials')
-            .select('*')
-            .eq('moodle_course_id', moodleCourseId)
-            .limit(10);
-
+          const mats = await getPersonalMaterials({ moodleCourseId, limit: 30 });
           if (mats) {
-            for (const mat of mats) {
-              if (mat.storage_url && !docMap.has(mat.title.toLowerCase())) {
+            const matchingMats = mats.filter(m =>
+              checkedUploadSources.some(s =>
+                s.name.toLowerCase() === String(m.title).toLowerCase() ||
+                (s.id && (s.id.includes(String(m.id)) || String(m.id).includes(s.id)))
+              )
+            );
+
+            for (const mat of matchingMats) {
+              const lowerTitle = String(mat.title).toLowerCase();
+              if (mat.storage_url && !docMap.has(lowerTitle)) {
                 try {
-                  const text = await parseDocumentFromUrl(mat.storage_url, mat.title);
-                  if (text && text.length > 50) {
-                    docMap.set(mat.title.toLowerCase(), text);
+                  const text = await parseDocumentFromUrl(String(mat.storage_url), String(mat.title));
+                  if (text && text.length > 20) {
+                    docMap.set(lowerTitle, text);
                   }
                 } catch {
                   // ignore
@@ -125,87 +207,150 @@ export async function POST(request: Request) {
               }
             }
           }
-        } catch (sbErr) {
-          console.warn('Could not query materials via Supabase for teacher assistant:', sbErr);
+        } catch (firebaseErr) {
+          console.warn('Firebase query for teacher upload materials:', firebaseErr);
         }
       }
 
-      if (db && docMap.size === 0) {
-        try {
-          const dbDocs = await db
-            .select()
-            .from(personalMaterials)
-            .where(eq(personalMaterials.moodleCourseId, moodleCourseId))
-            .limit(10);
-
-          for (const doc of dbDocs) {
-            if (doc.storageUrl && !docMap.has(doc.title.toLowerCase())) {
-              try {
-                const text = await parseDocumentFromUrl(doc.storageUrl, doc.title);
-                if (text && text.length > 50) {
-                  docMap.set(doc.title.toLowerCase(), text);
-                }
-              } catch {
-                // ignore
-              }
+      // 3. Fallback: Parse URL if provided directly on the checked source
+      for (const src of checkedUploadSources) {
+        const lowerName = src.name.toLowerCase();
+        if (!docMap.has(lowerName) && src.url) {
+          try {
+            const extractedText = await parseDocumentFromUrl(src.url, src.name);
+            if (extractedText && extractedText.trim().length > 20) {
+              docMap.set(lowerName, extractedText.trim());
             }
+          } catch (urlErr) {
+            console.warn(`Could not parse checked upload ${src.name}:`, urlErr);
           }
-        } catch (dbErr) {
-          console.warn('Could not query documents for teacher assistant:', dbErr);
         }
       }
     }
 
-    // Fetch URLs from provided sources
-    for (const src of sources.slice(0, 5)) {
-      const lowerName = src.name.toLowerCase();
-      if (!docMap.has(lowerName) && src.url) {
-        try {
-          const extractedText = await parseDocumentFromUrl(src.url, src.name);
-          if (extractedText && extractedText.trim()) {
-            docMap.set(lowerName, extractedText);
-          }
-        } catch {
-          // non-fatal
-        }
-      }
-    }
-
-    // Compile and do RAG retrieval
-    const compiledDocs: Array<{ title: string; text: string }> = [];
+    // C. Combine Chunks strictly from checked sources
+    const inMemoryChunks: DocumentChunk[] = [];
     for (const [title, text] of docMap.entries()) {
-      if (text.trim() && !compiledDocs.some(d => d.title === title)) {
-        compiledDocs.push({ title, text });
-      }
+      const chunks = chunkDocument(title, text);
+      inMemoryChunks.push(...chunks);
     }
 
-    if (compiledDocs.length > 0) {
+    const allCandidateChunks: DocumentChunk[] = [...storedLmsChunks, ...inMemoryChunks];
+
+    // Filter candidate chunks so they ONLY belong to titles in effectiveSources
+    const allowedTitles = new Set(effectiveSources.map(s => s.name.toLowerCase().trim()));
+    const filteredCandidateChunks = allCandidateChunks.filter(chunk => {
+      if (allowedTitles.size === 0) return false;
+      const t = chunk.docTitle.toLowerCase().trim();
+      return allowedTitles.has(t) || Array.from(allowedTitles).some(at => t.includes(at) || at.includes(t));
+    });
+
+    const lowerQ = question.toLowerCase();
+    const isOverviewQuery =
+      lowerQ.includes('file') ||
+      lowerQ.includes('tài liệu') ||
+      lowerQ.includes('slide') ||
+      lowerQ.includes('nội dung') ||
+      lowerQ.includes('tóm tắt') ||
+      lowerQ.includes('mục lục') ||
+      lowerQ.includes('giới thiệu') ||
+      lowerQ.includes('đề tài');
+
+    if (filteredCandidateChunks.length > 0) {
       try {
-        const relevantChunks = await retrieveRelevantChunks(question, compiledDocs, {
+        const relevantChunks = scoreAndSelectChunks(filteredCandidateChunks, question, {
           topK: 8,
           maxTotalChars: 20000,
           minSimilarity: 0.12,
         });
-        if (relevantChunks.length > 0) {
-          documentContext = formatChunksForPrompt(relevantChunks);
+
+        // If the question is generic ("nội dung file", "tóm tắt", "slide này nói gì") or no chunk hit high score,
+        // guarantee lead chunks of the checked documents are included.
+        if (isOverviewQuery || relevantChunks.length < 2) {
+          // Prepend lead chunks of each checked document to give the AI full context
+          const leadChunks: DocumentChunk[] = [];
+          const seenChunkIds = new Set(relevantChunks.map(c => c.id));
+          for (const title of allowedTitles) {
+            const docChunks = filteredCandidateChunks.filter(c =>
+              c.docTitle.toLowerCase().trim() === title ||
+              c.docTitle.toLowerCase().includes(title) ||
+              title.includes(c.docTitle.toLowerCase())
+            );
+            docChunks.slice(0, 15).forEach(c => {
+              if (!seenChunkIds.has(c.id)) {
+                leadChunks.push(c);
+                seenChunkIds.add(c.id);
+              }
+            });
+          }
+          const merged = [...leadChunks, ...relevantChunks].slice(0, 24);
+          documentContext = formatChunksForPrompt(merged);
         } else {
-          const maxPerDoc = Math.max(3000, Math.floor(25000 / compiledDocs.length));
-          documentContext = compiledDocs
-            .map((doc, idx) => `--- TÀI LIỆU [${idx + 1}]: "${doc.title}" ---\n${doc.text.slice(0, maxPerDoc)}`)
-            .join('\n\n');
+          documentContext = formatChunksForPrompt(relevantChunks);
         }
-      } catch {
-        const maxPerDoc = Math.max(3000, Math.floor(25000 / compiledDocs.length));
-        documentContext = compiledDocs
-          .map((doc, idx) => `--- TÀI LIỆU [${idx + 1}]: "${doc.title}" ---\n${doc.text.slice(0, maxPerDoc)}`)
+      } catch (ragErr) {
+        console.warn('Teacher Assistant RAG retrieval error:', ragErr);
+        // Fallback: take top slices of each available doc
+        documentContext = filteredCandidateChunks
+          .slice(0, 8)
+          .map((c, idx) => `--- [${idx + 1}] "${c.docTitle}" ---\n${c.text.slice(0, 2000)}`)
           .join('\n\n');
       }
     }
 
-    // 2. Build gradebook context if available
+    const ragDocuments = filteredCandidateChunks.slice(0, 15).map((c, idx) => ({
+      id: c.id || `doc_${idx + 1}`,
+      title: c.docTitle || `Tài liệu ${idx + 1}`,
+      text: c.text,
+    }));
+
+    // 2. Build Upcoming Events context for Course Reference
+    let eventsContext = '';
+    let upcomingEventsList: Array<{ title: string; due: string; type?: string }> = [];
+
+    if (Array.isArray(upcomingEvents) && upcomingEvents.length > 0) {
+      upcomingEventsList = upcomingEvents.map(e => ({
+        title: e.title,
+        due: e.due || '',
+        type: e.type || 'Sự kiện',
+      }));
+    } else if (moodleCourseId && supabaseAdmin) {
+      try {
+        const { data: dbEvts } = await supabaseAdmin
+          .from('events')
+          .select('title, deliver_time, event_type')
+          .eq('moodle_course_id', moodleCourseId)
+          .gte('deliver_time', new Date().toISOString())
+          .order('deliver_time', { ascending: true })
+          .limit(8);
+
+        if (dbEvts && dbEvts.length > 0) {
+          upcomingEventsList = dbEvts.map(e => ({
+            title: e.title,
+            due: new Date(e.deliver_time).toLocaleString('vi-VN', {
+              hour: '2-digit',
+              minute: '2-digit',
+              day: '2-digit',
+              month: '2-digit',
+              year: 'numeric',
+            }),
+            type: e.event_type,
+          }));
+        }
+      } catch (evtErr) {
+        console.warn('Teacher Assistant Supabase events query error:', evtErr);
+      }
+    }
+
+    if (upcomingEventsList.length > 0) {
+      eventsContext = upcomingEventsList
+        .map((e, idx) => `  ${idx + 1}. [${e.type || 'Sự kiện'}] ${e.title} (Thời gian/Hạn chót: ${e.due || 'Chưa ấn định'})`)
+        .join('\n');
+    }
+
+    // 3. Build Gradebook context for Course Reference
     let gradebookContext = '';
     if (Array.isArray(students) && students.length > 0) {
-      gradebookContext += `\n\n--- KẾT QUẢ SỔ ĐIỂM THỰC TẾ CỦA LỚP HỌC ---\n`;
       gradebookContext += `- Sĩ số lớp: ${students.length} sinh viên\n`;
       if (gradeColumns.length > 0) {
         gradebookContext += `- Các cột điểm kiểm tra:\n`;
@@ -214,7 +359,7 @@ export async function POST(request: Request) {
         });
       }
 
-      gradebookContext += `\n- BẢNG ĐIỂM CHI TIẾT TỪNG SINH VIÊN (DỮ LIỆU THỰC TẾ):\n`;
+      gradebookContext += `\n- BẢNG ĐIỂM CHI TIẾT TỪNG SINH VIÊN (DỮ LIỆU ĐIỂM THỰC TẾ):\n`;
       students.forEach(s => {
         const idInfo = s.idnumber || s.username ? ` [Mã SV: ${s.idnumber || s.username}]` : '';
         gradebookContext += `  * Sinh viên: **${s.fullname}**${idInfo}\n`;
@@ -231,15 +376,14 @@ export async function POST(request: Request) {
           gradebookContext += `      - Chưa có điểm ghi nhận\n`;
         }
       });
-      gradebookContext += `---------------------------------------------------\n`;
     } else if (students && typeof students === 'object' && 'total' in students && (students.total ?? 0) > 0) {
-      gradebookContext += `\n\nTHÔNG TIN LỚP HỌC:\n- Sĩ số: ${students.total} sinh viên`;
+      gradebookContext += `- Sĩ số: ${students.total} sinh viên`;
       if (students.names && students.names.length > 0) {
         gradebookContext += `\n- Danh sách: ${students.names.slice(0, 30).join(', ')}`;
       }
     }
 
-    // 3. Build Teacher-focused System Prompt
+    // 4. Build System Instruction with strict separation
     const subjectName = course || 'môn học hiện tại';
 
     const systemInstruction = `Bạn là TRỢ LÝ AI CHUYÊN BIỆT CHO GIẢNG VIÊN (Teacher AI Assistant) môn "${subjectName}".
@@ -253,53 +397,119 @@ Bạn hỗ trợ Giảng viên với TẤT CẢ các công việc giảng dạy,
 5. PHÂN TÍCH PHỔ ĐIỂM & HIỆU QUẢ GIẢNG DẠY: Khi có dữ liệu sổ điểm, phân tích chính xác điểm số, xác định sinh viên cần hỗ trợ, đánh giá hiệu quả từng cột điểm.
 6. SOẠN NHẬN XÉT SINH VIÊN: Viết feedback chuyên nghiệp, mang tính xây dựng cho từng sinh viên hoặc nhóm dựa trên kết quả học tập.
 
-QUY TẮC ĐẶC BIỆT KHI PHÂN TÍCH BẢNG ĐIỂM (BẮT BUỘC):
-- Khi trả lời câu hỏi liên quan đến bảng điểm, đánh giá sinh viên, tìm sinh viên cần cải thiện:
-  1. BẮT BUỘC sử dụng CHÍNH XÁC các con số từ phần "KẾT QUẢ SỔ ĐIỂM THỰC TẾ CỦA LỚP HỌC" được cung cấp bên dưới.
-  2. TUYỆT ĐỐI KHÔNG TỰ BỊA, TỰ GIẢ ĐỊNH hoặc đổi số điểm của sinh viên (không được tự nghĩ ra điểm 5, 8, 60, 75,... nếu số liệu thật khác).
-  3. Luôn đối chiếu điểm với điểm tối đa của cột (ví dụ: điểm 6 / 100đ là 6%, điểm 10 / 10đ là 100%) để nhận định chính xác sinh viên nào làm bài tốt ở cột nào và còn yếu ở cột nào.
+${allowExternalSource ? `CHẾ ĐỘ MỞ RỘNG KIẾN THỨC & SÁNG TẠO SƯ PHẠM / CÔNG NGHỆ TOÀN DIỆN (EXTERNAL SOURCES ALLOWED):
+- Giảng viên ĐANG BẬT chế độ mở rộng.
+- HÃY PHÁT HUY TỐI ĐA TRÍ TUỆ, TƯ DUY KIẾN TRÚC, KINH NGHIỆM THỰC CHIẾN VÀ NĂNG LỰC SƯ PHẠM CỦA BẠN:
+${answerStyle === 'concise'
+  ? `  + VÌ GIẢNG VIÊN ĐANG CHỌN "Nhanh / Trọng tâm": Khi hỏi về lựa chọn công nghệ / framework / giải pháp, BẮT BUỘC CHỌN ĐÚNG 1 PHƯƠNG ÁN TỐI ƯU NHẤT (SINGLE BEST PICK) kèm 1-2 lý do then chốt. CẤM liệt kê nhiều lựa chọn dông dài, CẤM lập bảng Markdown, CẤM mở bài tự xưng chức danh.`
+  : `  + VÌ GIẢNG VIÊN ĐANG CHỌN "Chi tiết / Chuyên sâu": Khi hỏi về kiến trúc/công nghệ/bài giảng, hãy phân tầng rõ ràng (Backend, Frontend/Mobile, Real-time/Database), phân tích ưu/nhược điểm, case study thực tế và combo stack lý tưởng.`}
+  + TUYỆT ĐỐI KHÔNG mở đầu bằng việc xưng danh "Với vai trò là...", "Tôi là kiến trúc sư...". Đi thẳng vào giải pháp.` : `BỘ QUY TẮC KHÓA KIẾN THỨC NỀN & CHỐNG ẢO GIÁC (REASONING OVER FACT):
+- Chế độ tra cứu tài liệu nghiêm ngặt ĐANG ĐƯỢC BẬT (Nguồn ngoài: TẮT).
+- SỬ DỤNG TÀI LIỆU ĐƯỢC CUNG CẤP TRONG THẺ <DOCUMENTS> LÀM NỀN TẢNG SỰ THẬT DUY NHẤT (FACTS).
+- CẤM BỊA ĐẶT số liệu, định nghĩa, thực thể hoặc kiến thức không có trong tài liệu.
+- TUY NHIÊN, BẠN ĐƯỢC PHÉP sử dụng khả năng tư duy logic và chuyên môn sư phạm của mình để giải thích, tóm tắt, so sánh hoặc ngoại suy dựa trên các sự thật đó để phục vụ công tác giảng dạy một cách tốt nhất.
+- QUY TRÌNH PHẢN HỒI:
+  + Quét thẻ <DOCUMENTS> để tìm các luận điểm, sự thật liên quan.
+  + NẾU TÌM THẤY TRONG TÀI LIỆU: Trả lời bám sát sự thật tài liệu, trích dẫn nguồn [1], [2].
+  + NẾU KHÔNG TÌM THẤY TRONG TÀI LIỆU: BẮT BUỘC trả về đúng mã [OUT_OF_CONTEXT] kèm lời giải thích:
+    "Tài liệu bạn đã tích chọn không đề cập đến nội dung này. Vui lòng tích chọn thêm tài liệu phù hợp ở danh sách bên trái hoặc bật chế độ 'Cho phép nguồn ngoài' để AI tra cứu mở rộng."`}
 
-QUY TẮC PHẠM VI:
-- Tập trung vào môn "${subjectName}" và các chủ đề liên quan trực tiếp.
-- ${allowExternalSource ? 'CHẾ ĐỘ MỞ RỘNG (EXTERNAL SOURCES ALLOWED): Ưu tiên tài liệu môn học, đồng thời được phép liên hệ thực tiễn ngành nghề, các giải pháp công nghệ hiện đại, tài liệu học thuật quốc tế và ví dụ thực tế phong phú.' : 'CHẾ ĐỘ BÁM SÁT NGHIÊM NGẶT (STRICT GROUNDING): Bám sát chặt chẽ nội dung tài liệu môn học và bảng điểm được cung cấp dưới đây, không suy diễn kiến thức ngoài giáo trình.'}
-- Sử dụng ngôn ngữ chuyên nghiệp, chuẩn sư phạm đại học.
+QUY TẮC PHÂN ĐỊNH NGUỒN DỮ LIỆU TUYỆT ĐỐI (CỰC KỲ QUAN TRỌNG - KHÔNG ĐƯỢC NHẦM LẪN):
+1. MỤC "CÁC TÀI LIỆU BÀI GIẢNG / HỌC TẬP ĐƯỢC CHỌN TỪ CỘT TRÁI":
+   - Đây là tài liệu giáo trình, bài giảng, slide PowerPoint, tài liệu đồ án... mà Giảng viên ĐÃ TÍCH CHỌN ở danh sách nguồn tài liệu bên trái màn hình.
+   - Bạn CHỈ ĐƯỢC đọc và trích dẫn kiến thức bài học từ các tài liệu ĐÃ ĐƯỢC TÍCH CHỌN trong thẻ <DOCUMENTS>.
+   - KHI GIẢNG VIÊN HỎI VỀ "file này", "slide này", "tài liệu này", "nội dung của file", "tóm tắt bài giảng" hoặc kiến thức chuyên đề: Bạn BẮT BUỘC phải đọc và trả lời từ mục tài liệu được chọn này.
+   - TUYỆT ĐỐI KHÔNG ĐƯỢC nhầm lẫn giữa tài liệu bài giảng/slide với phần SỔ ĐIỂM hay LỊCH SỰ KIỆN!
+   - TUYỆT ĐỐI KHÔNG đem bảng điểm số của sinh viên ra để tóm tắt cho câu hỏi về nội dung file/slide bài giảng!
+
+2. MỤC "THÔNG TIN SỔ ĐIỂM & ĐÁNH GIÁ LỚP HỌC":
+   - Đây là dữ liệu quản lý điểm số và đánh giá sinh viên của môn học. AI luôn được cung cấp để biết thông tin lớp học.
+   - CHỈ SỬ DỤNG dữ liệu này khi giảng viên hỏi về: điểm số, nhận xét sinh viên, phổ điểm, sinh viên nào cần hỗ trợ, thống kê điểm bài kiểm tra.
+   - Khi trả lời về điểm: BẮT BUỘC dùng đúng số liệu thực tế, không tự bịa điểm.
+
+3. MỤC "LỊCH TRÌNH & SỰ KIỆN SẮP TỚI":
+   - Dùng khi giảng viên hỏi về thời hạn nộp bài tập, lịch thi, sự kiện sắp diễn ra của môn học.
 
 QUY TẮC PHONG CÁCH & ĐỊNH DẠNG SƯ PHẠM (BẮT BUỘC):
 1. ĐI THẲNG VÀO NỘI DUNG YÊU CẦU: Không dùng lời chào hỏi xã giao hay kết thúc sáo rỗng. Bắt đầu trực tiếp bằng nội dung tư vấn, phân tích hoặc sản phẩm bài giảng được yêu cầu.
-2. ${answerStyle === 'detailed' ? 'MỨC ĐỘ CHI TIẾT: Phân tích chuyên sâu, toàn diện, đa chiều, giải thích cặn kẽ nguyên lý, dẫn chứng đầy đủ và hướng dẫn thực hiện từng bước.' : 'MỨC ĐỘ CHI TIẾT: Phân tích nhanh, súc tích, đi thẳng vào các ý chính và giải pháp trọng tâm.'}
+2. PHONG CÁCH & MỨC ĐỘ CHI TIẾT (BẮT BUỘC TUÂN THỦ):
+${answerStyle === 'detailed'
+  ? '- Đang chọn "Chi tiết / Chuyên sâu": Phân tích toàn diện, sâu sắc, giải thích cặn kẽ nguyên lý, dẫn chứng đầy đủ, lập bảng so sánh hoặc hướng dẫn từng bước.'
+  : '- Đang chọn "Nhanh / Trọng tâm": TUÂN THỦ NGHIÊM NGẶT độ dài dưới 80-150 từ (hoặc tối đa 2-3 gạch đầu dòng), đi thẳng vào kết luận/giải pháp then chốt. KHI HỎI NÊN DÙNG GÌ, BẮT BUỘC CHỌN ĐÚNG 1 CÁI DUY NHẤT. CẤM lập bảng Markdown, CẤM chia nhiều mục La Mã, không dông dài.'}
 3. VĂN PHONG HỌC THUẬT CHUẨN MỰC: Sử dụng ngôn ngữ chuẩn sư phạm đại học, trang trọng, khúc chiết, chuẩn xác. Tuyệt đối không dùng phong cách suồng sã hay mỉa mai.
 4. TOÁN HỌC: Sử dụng LaTeX chuẩn $công_thức$ (ví dụ: $O(n \\log n)$, $\\sum_{i=1}^{n}$).
-5. BẢNG BIỂU: Dùng thẻ <br/> xuống dòng trong ô bảng Markdown. Không đặt code block bên trong ô bảng.
-6. Khi soạn câu hỏi trắc nghiệm, trình bày rõ đáp án đúng và lời giải thích.`;
+5. BẢNG BIỂU: ${answerStyle === 'concise' ? 'Ở chế độ "Nhanh / Trọng tâm", CẤM dùng bảng Markdown Table.' : 'Dùng thẻ <br/> xuống dòng trong ô bảng Markdown. Không đặt code block bên trong ô bảng.'}
+6. Khi soạn câu hỏi trắc nghiệm, trình bày rõ đáp án đúng và lời giải thích.
+7. LIÊN KẾT NGUỒN NGOÀI: ${answerStyle === 'concise' ? 'Tối đa 1 link duy nhất nhúng inline [Tên](url). CẤM spam danh sách link.' : 'Mọi liên kết URL phải nhúng inline trực tiếp vào câu chữ dạng [Tên](https://...). TUYỆT ĐỐI KHÔNG tạo riêng từng gạch đầu dòng chỉ để dán link (như "• [Link](...)"). Tuyệt đối không tự bịa link.'}`;
 
-    let contextSection = '';
+    // 5. Build Grounded Context Prompt
+    let contextSection = `MÔN HỌC: ${course} (Mã môn: ${courseCode || 'N/A'})\n\n`;
+
+    // Document context section (Only checked sources) inside <DOCUMENTS> tags
+    contextSection += `=== CÁC TÀI LIỆU BÀI GIẢNG / HỌC TẬP ĐƯỢC CHỌN TỪ CỘT TRÁI ===\n<DOCUMENTS>\n`;
     if (documentContext.trim()) {
-      contextSection = `\nTÀI LIỆU MÔN HỌC (làm cơ sở nội dung):\n${documentContext}`;
+      contextSection += `${documentContext}\n</DOCUMENTS>\n\n`;
     } else {
-      contextSection = `\nMÔN HỌC: ${course}\nMã môn: ${courseCode || 'N/A'}`;
+      contextSection += `Danh sách tài liệu đang chọn: ${effectiveSourceNames.join(', ') || '(Không có tài liệu nào được tích chọn)'}\n(Không có tài liệu nào được tích chọn hoặc tài liệu chưa có nội dung văn bản)\n</DOCUMENTS>\n\n`;
     }
 
-    if (gradebookContext) {
-      contextSection += gradebookContext;
+    // Gradebook context section (Course reference)
+    if (gradebookContext.trim()) {
+      contextSection += `=== THÔNG TIN SỔ ĐIỂM & ĐÁNH GIÁ LỚP HỌC (DỮ LIỆU ĐIỂM SỐ NỘI BỘ, KHÔNG PHẢI NỘI DUNG TÀI LIỆU BÀI GIẢNG) ===\n${gradebookContext}\n\n`;
     }
 
-    const userPrompt = `${contextSection}\n---\nYÊU CẦU CỦA GIẢNG VIÊN: ${question}`;
+    // Upcoming events context section (Course reference)
+    if (eventsContext.trim()) {
+      contextSection += `=== LỊCH TRÌNH & SỰ KIỆN SẮP TỚI CỦA KHÓA HỌC (CHỈ DÙNG KHI HỎI VỀ DEADLINE / SỰ KIỆN) ===\n${eventsContext}\n\n`;
+    }
 
-    // 4. Generate AI response
+    const promptAnchor = answerStyle === 'concise' && !isOverviewQuery
+      ? `\n\n[LỆNH TỐI CAO - NGHIÊM NGẶT TUÂN THỦ]:
+Giảng viên đang chọn chế độ 'Nhanh / Trọng tâm'.
+1. NẾU CÂU HỎI VỀ LỰA CHỌN CÔNG NGHỆ / FRAMEWORK / GIẢI PHÁP: Bạn BẮT BUỘC CHỈ ĐƯỢC CHỌN 1 ĐÁP ÁN DUY NHẤT TỐI ƯU NHẤT (Single Best Pick). Nêu tên trực tiếp ở câu đầu và nêu 1-2 lý do then chốt. CẤM liệt kê nhiều lựa chọn, CẤM phân tầng dài dòng, CẤM tự xưng danh phận.
+2. TUYỆT ĐỐI CẤM DÙNG BẢNG BIỂU (Markdown Table). CẤM chèn danh sách nhiều link.
+3. ĐỘ DÀI TỐI ĐA: Dưới 150 từ, trả lời thẳng thắn trong 1-2 đoạn văn.`
+      : '';
+
+    const userPrompt = `${contextSection}---\nYÊU CẦU CỦA GIẢNG VIÊN: ${question}${promptAnchor}`;
+
+    // 6. Generate AI response
     let aiText = '';
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let groundingMetadata: any = null;
+
+    const effectiveTemperature = allowExternalSource
+      ? (answerStyle === 'concise' ? 0.35 : 0.7)
+      : 0.25;
+    const effectiveTopP = allowExternalSource
+      ? (answerStyle === 'concise' ? 0.8 : 0.95)
+      : 0.3;
+    const effectiveDocuments = allowExternalSource ? undefined : ragDocuments;
+    const outOfContextStandardMsg = `Tài liệu bạn đã tích chọn không đề cập đến nội dung này. Vui lòng tích chọn thêm tài liệu phù hợp ở danh sách bên trái hoặc bật chế độ **"Cho phép nguồn ngoài"** để AI tra cứu mở rộng.`;
+
+    let maxTokensLimit: number;
+    if (isOverviewQuery) {
+      maxTokensLimit = 1500;
+    } else if (answerStyle === 'concise') {
+      maxTokensLimit = 250;
+    } else {
+      maxTokensLimit = 2500;
+    }
 
     try {
       const result = await generateText(model, {
         system: systemInstruction,
         userPrompt,
         history: history.slice(-8).map(msg => ({
-          role: msg.role === 'user' ? 'user' as const : 'assistant' as const,
+          role: msg.role === 'user' ? ('user' as const) : ('assistant' as const),
           content: msg.text,
         })),
-        temperature: 0.3,
-        googleSearchGrounding: true,
+        temperature: effectiveTemperature,
+        topP: effectiveTopP,
+        maxTokens: maxTokensLimit,
+        documents: effectiveDocuments,
+        googleSearchGrounding: allowExternalSource,
+        allowExternalSource: Boolean(allowExternalSource),
       });
       aiText = result.text;
       groundingMetadata = result.groundingMetadata || null;
@@ -309,14 +519,19 @@ QUY TẮC PHONG CÁCH & ĐỊNH DẠNG SƯ PHẠM (BẮT BUỘC):
 
     if (!aiText) {
       return NextResponse.json({
-        answer: `⚠️ **Không thể kết nối API AI**\n\nVui lòng kiểm tra lại API key trong file \`.dev.vars\` / \`.env.local\`.`,
+        answer: `⚠️ **Không thể kết nối API AI**\n\nVui lòng kiểm tra lại API key trong cấu hình hệ thống.`,
         sources: [],
       });
     }
 
-    // 5. Extract grounding sources
-    let citedSources: Array<{ name: string; isExternal: boolean; url: string }> = [];
-    if (groundingMetadata?.groundingChunks?.length) {
+    const isOutOfContext = aiText.includes('[OUT_OF_CONTEXT]');
+    if (isOutOfContext) {
+      aiText = outOfContextStandardMsg;
+    }
+
+    // 7. Extract grounding sources
+    const citedSources: Array<{ name: string; isExternal: boolean; url: string }> = [];
+    if (!isOutOfContext && groundingMetadata?.groundingChunks?.length) {
       const seenUrls = new Set<string>();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       for (const chunk of groundingMetadata.groundingChunks as any[]) {
@@ -324,7 +539,11 @@ QUY TẮC PHONG CÁCH & ĐỊNH DẠNG SƯ PHẠM (BẮT BUỘC):
         let title = chunk?.web?.title || '';
         if (uri) {
           if (!title) {
-            try { title = new URL(uri).hostname.replace(/^www\./, ''); } catch { title = 'Nguồn tham khảo'; }
+            try {
+              title = new URL(uri).hostname.replace(/^www\./, '');
+            } catch {
+              title = 'Nguồn tham khảo';
+            }
           }
           if (!seenUrls.has(uri) && citedSources.length < 5) {
             seenUrls.add(uri);
@@ -334,15 +553,17 @@ QUY TẮC PHONG CÁCH & ĐỊNH DẠNG SƯ PHẠM (BẮT BUỘC):
       }
     }
 
-    if (citedSources.length === 0) {
-      const searchQuery = question.replace(/[\r\n]+/g, ' ').trim().slice(0, 80);
-      if (searchQuery) {
-        citedSources = [{
-          name: `Tra cứu: ${searchQuery.length > 50 ? searchQuery.slice(0, 50) + '…' : searchQuery}`,
-          isExternal: true,
-          url: `https://www.google.com/search?q=${encodeURIComponent(searchQuery + ' ' + course)}`,
-        }];
-      }
+    // Include checked document names if they were utilized and not out of context
+    if (!isOutOfContext && documentContext.trim() && effectiveSourceNames.length > 0) {
+      effectiveSourceNames.slice(0, 3).forEach(name => {
+        if (!citedSources.some(c => c.name === name)) {
+          citedSources.unshift({
+            name,
+            isExternal: false,
+            url: '',
+          });
+        }
+      });
     }
 
     return NextResponse.json({

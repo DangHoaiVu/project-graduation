@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { registerFcmToken } from '@/app/lib/notification-client';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -27,6 +28,14 @@ export default function LoginPage() {
       }
       localStorage.setItem('moodleToken', data.moodleToken);
       localStorage.setItem('moodleUser', JSON.stringify(data.user));
+
+      if (data.user.id) {
+        try {
+          await registerFcmToken(data.user.id, true);
+        } catch (fcmErr) {
+          console.warn('FCM registration on login:', fcmErr);
+        }
+      }
 
       router.push('/home');
     } catch (submissionError) {

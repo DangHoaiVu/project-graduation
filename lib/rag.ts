@@ -1,5 +1,15 @@
-import { getGeminiClient } from '@/models/gemini';
+import { getGeminiClient, executeWithGeminiPool } from '@/models/gemini';
 import { isProviderBlocked, blockProviderUntilTomorrow, isQuotaExhaustedError } from '@/models/registry';
+
+export interface DocumentMetadata {
+  sectionId?: string | number;
+  sectionName?: string;
+  chapter?: string | number;
+  topic?: string;
+  docId?: string;
+  courseId?: string | number;
+  courseCode?: string;
+}
 
 export interface DocumentChunk {
   id: string;
@@ -9,11 +19,13 @@ export interface DocumentChunk {
   totalChunks: number;
   embedding?: number[];
   similarityScore?: number;
+  metadata?: DocumentMetadata;
 }
 
 export interface RawDocument {
   title: string;
   text: string;
+  metadata?: DocumentMetadata;
 }
 
 export interface RetrievalOptions {
@@ -22,6 +34,14 @@ export interface RetrievalOptions {
   minSimilarity?: number;
   chunkSize?: number;
   chunkOverlap?: number;
+  // Metadata Filtering options
+  filterSectionId?: string | number;
+  filterSectionName?: string;
+  filterChapter?: string | number;
+  filterDocTitles?: string[];
+  // Dynamic Top-K options
+  dynamicTopK?: boolean;
+  highConfidenceThreshold?: number;
 }
 
 // In-memory document chunk & embedding cache: hash -> DocumentChunk[]
@@ -82,15 +102,29 @@ function hashDocument(title: string, text: string): string {
 }
 
 /**
+ * Extracts chapter or section number from title or text (e.g. "Chương 3", "Bài 2", "Chapter 4")
+ */
+export function extractChapterNumber(text: string): string | null {
+  if (!text) return null;
+  const match = text.match(/(?:chương|chuong|bài|bai|chapter|section|ch)\s*([0-9]+|[ivxlcdm]+)/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
+/**
  * Splits document text into overlapping chunks, respecting paragraph and sentence boundaries.
  */
 export function chunkDocument(
   text: string,
   docTitle: string,
-  options: { chunkSize?: number; chunkOverlap?: number } = {}
+  options: { chunkSize?: number; chunkOverlap?: number; metadata?: DocumentMetadata } = {}
 ): DocumentChunk[] {
   const chunkSize = options.chunkSize || 650;
   const chunkOverlap = options.chunkOverlap || 120;
+
+  const meta: DocumentMetadata = {
+    ...options.metadata,
+    chapter: options.metadata?.chapter || extractChapterNumber(docTitle) || undefined,
+  };
 
   const cleanText = text.replace(/\r\n/g, '\n').trim();
   if (!cleanText) return [];
@@ -104,6 +138,7 @@ export function chunkDocument(
         text: cleanText,
         chunkIndex: 0,
         totalChunks: 1,
+        metadata: meta,
       },
     ];
   }
@@ -165,6 +200,7 @@ export function chunkDocument(
     text: chunkText,
     chunkIndex: idx,
     totalChunks: chunks.length,
+    metadata: meta,
   }));
 }
 
@@ -239,43 +275,56 @@ function computeBM25Score(queryTokens: string[], chunkText: string): number {
 export async function generateEmbeddings(texts: string[]): Promise<Array<number[] | null>> {
   if (!texts || texts.length === 0) return [];
 
-  // 1. Try Gemini text-embedding-004 if not blocked
+  // 1. Try Gemini embedding if not blocked
   if (!isProviderBlocked('gemini')) {
-    const gemini = getGeminiClient();
-    if (gemini) {
-      try {
-        const results: Array<number[] | null> = [];
-        // Process in small batches of 8 to prevent rate limit
-        for (let i = 0; i < texts.length; i += 8) {
-          const batch = texts.slice(i, i + 8);
+    try {
+      const results: Array<number[] | null> = [];
+      // Process in small batches of 8 to prevent rate limit
+      for (let i = 0; i < texts.length; i += 8) {
+        const batch = texts.slice(i, i + 8);
+        const batchRes = await executeWithGeminiPool(async (client) => {
           const batchPromises = batch.map(async text => {
             try {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const res = await (gemini.models as any).embedContent({
-                model: 'text-embedding-004',
+              const res = await (client.models as any).embedContent({
+                model: 'gemini-embedding-001',
                 contents: text.slice(0, 2048),
+                config: {
+                  outputDimensionality: 768,
+                },
               });
-              return (res.embedding?.values as number[]) || null;
+              const vec = res.embeddings?.[0]?.values || res.embedding?.values || null;
+              return (vec as number[]) || null;
             } catch (innerErr) {
               if (isQuotaExhaustedError(innerErr)) {
-                blockProviderUntilTomorrow('gemini', 'Embedding quota exceeded');
+                throw innerErr; // trigger key rotation in executeWithGeminiPool
               }
-              return null;
+              try {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const fbRes = await (client.models as any).embedContent({
+                  model: 'text-embedding-004',
+                  contents: text.slice(0, 2048),
+                });
+                const vec = fbRes.embeddings?.[0]?.values || fbRes.embedding?.values || null;
+                return (vec as number[]) || null;
+              } catch {
+                return null;
+              }
             }
           });
-          const batchRes = await Promise.all(batchPromises);
-          results.push(...batchRes);
-        }
-
-        if (results.some(r => r !== null)) {
-          return results;
-        }
-      } catch (err) {
-        if (isQuotaExhaustedError(err)) {
-          blockProviderUntilTomorrow('gemini', String(err));
-        }
-        console.warn('Gemini embedding failed, falling back to BM25:', err);
+          return await Promise.all(batchPromises);
+        });
+        results.push(...batchRes);
       }
+
+      if (results.some(r => r !== null)) {
+        return results;
+      }
+    } catch (err) {
+      if (isQuotaExhaustedError(err)) {
+        blockProviderUntilTomorrow('gemini', String(err));
+      }
+      console.warn('Gemini embedding failed, falling back to BM25:', err);
     }
   }
 
@@ -283,6 +332,9 @@ export async function generateEmbeddings(texts: string[]): Promise<Array<number[
   return texts.map(() => null);
 }
 
+/**
+ * Indexes documents into memory chunks and calculates vector embeddings.
+ */
 /**
  * Indexes documents into memory chunks and calculates vector embeddings.
  */
@@ -295,12 +347,19 @@ export async function indexDocuments(rawDocs: RawDocument[], options: RetrievalO
     const docHash = hashDocument(doc.title, doc.text);
 
     if (documentIndexCache.has(docHash)) {
-      allChunks.push(...documentIndexCache.get(docHash)!);
+      const cached = documentIndexCache.get(docHash)!;
+      if (doc.metadata) {
+        cached.forEach(c => {
+          c.metadata = { ...c.metadata, ...doc.metadata };
+        });
+      }
+      allChunks.push(...cached);
     } else {
       evictOldestIfNeeded();
       const chunks = chunkDocument(doc.text, doc.title, {
         chunkSize: options.chunkSize || 650,
         chunkOverlap: options.chunkOverlap || 120,
+        metadata: doc.metadata,
       });
       documentIndexCache.set(docHash, chunks);
       allChunks.push(...chunks);
@@ -327,7 +386,8 @@ export async function indexDocuments(rawDocs: RawDocument[], options: RetrievalO
 }
 
 /**
- * Performs Semantic + BM25 Hybrid Similarity Search to retrieve top-K relevant chunks for a given query.
+ * Performs Semantic + BM25 Hybrid Similarity Search with Metadata Filtering
+ * and Dynamic Top-K Cutoff Thresholding.
  */
 export async function retrieveRelevantChunks(
   query: string,
@@ -337,21 +397,71 @@ export async function retrieveRelevantChunks(
   const cleanQuery = (query || '').trim();
   if (!cleanQuery || rawDocs.length === 0) return [];
 
-  const topK = options.topK || 6;
-  const maxTotalChars = options.maxTotalChars || 14000;
-  const minSimilarity = options.minSimilarity ?? 0.15;
+  const maxTotalChars = options.maxTotalChars || 12000;
 
   // 1. Index and get all chunks
   const allChunks = await indexDocuments(rawDocs, options);
   if (allChunks.length === 0) return [];
 
-  // If total document content is small enough to fit inside budget, return all chunks directly
-  const totalLength = allChunks.reduce((acc, c) => acc + c.text.length, 0);
-  if (totalLength <= maxTotalChars && allChunks.length <= topK) {
-    return allChunks.map((c, idx) => ({ ...c, similarityScore: 1 - idx * 0.05 }));
+  // 2. Metadata Filtering (Phân vùng tìm kiếm theo Chapter / Section / Topic)
+  let candidateChunks = allChunks;
+  const targetSectionId = options.filterSectionId;
+  const targetSectionName = options.filterSectionName?.toLowerCase();
+  const queryChapter = extractChapterNumber(cleanQuery);
+  const targetChapter = options.filterChapter ? String(options.filterChapter).toLowerCase() : queryChapter;
+
+  if (
+    targetSectionId !== undefined ||
+    targetSectionName ||
+    targetChapter ||
+    (options.filterDocTitles && options.filterDocTitles.length > 0)
+  ) {
+    const filtered = allChunks.filter(chunk => {
+      const meta = chunk.metadata;
+      // Filter by doc titles if provided
+      if (options.filterDocTitles && options.filterDocTitles.length > 0) {
+        const matchesDoc = options.filterDocTitles.some(dt =>
+          chunk.docTitle.toLowerCase().includes(dt.toLowerCase())
+        );
+        if (!matchesDoc) return false;
+      }
+      // Filter by sectionId
+      if (targetSectionId !== undefined && meta?.sectionId !== undefined) {
+        if (String(meta.sectionId) === String(targetSectionId)) return true;
+      }
+      // Filter by chapter
+      if (targetChapter) {
+        const chunkChap = meta?.chapter ? String(meta.chapter).toLowerCase() : null;
+        if (chunkChap === targetChapter) return true;
+        const lowerTitle = chunk.docTitle.toLowerCase();
+        if (
+          lowerTitle.includes(`chương ${targetChapter}`) ||
+          lowerTitle.includes(`chuong ${targetChapter}`) ||
+          lowerTitle.includes(`chapter ${targetChapter}`) ||
+          lowerTitle.includes(`bài ${targetChapter}`) ||
+          lowerTitle.includes(`bai ${targetChapter}`)
+        ) {
+          return true;
+        }
+      }
+      // Filter by sectionName
+      if (targetSectionName && meta?.sectionName) {
+        if (meta.sectionName.toLowerCase().includes(targetSectionName)) return true;
+      }
+      return false;
+    });
+
+    if (filtered.length > 0) {
+      console.log(
+        `[RAG Metadata Filter] Restricted vector search from ${allChunks.length} down to ${filtered.length} chunks (Target: ${
+          targetChapter ? `Chương ${targetChapter}` : targetSectionName || targetSectionId
+        })`
+      );
+      candidateChunks = filtered;
+    }
   }
 
-  // 2. Generate embedding for user query
+  // 3. Generate embedding for user query
   let queryEmbedding: number[] | null = null;
   try {
     const [qEmb] = await generateEmbeddings([cleanQuery]);
@@ -360,10 +470,32 @@ export async function retrieveRelevantChunks(
     queryEmbedding = null;
   }
 
+  return scoreAndSelectChunks(candidateChunks, cleanQuery, options, queryEmbedding);
+}
+
+/**
+ * Scores candidate chunks (Hybrid Semantic + BM25) and selects the best matching chunks
+ * using Dynamic Top-K cut-off thresholding.
+ *
+ * Fix: Enforces minimum 3 chunks and minimum 500 chars to prevent the "Perfect Score Trap"
+ * where a single high-scoring but tiny chunk (e.g., a heading) causes [OUT_OF_CONTEXT].
+ */
+export function scoreAndSelectChunks(
+  candidateChunks: DocumentChunk[],
+  query: string,
+  options: RetrievalOptions = {},
+  queryEmbedding?: number[] | null
+): DocumentChunk[] {
+  const cleanQuery = (query || '').trim();
+  if (!cleanQuery || candidateChunks.length === 0) return [];
+
+  const maxTotalChars = options.maxTotalChars || 12000;
+  const minChunks = 3;         // Never send fewer than 3 chunks to AI
+  const minTotalChars = 500;   // Ensure AI gets at least 500 chars of context
   const queryTokens = tokenize(cleanQuery);
 
-  // 3. Score each chunk
-  const scoredChunks: DocumentChunk[] = allChunks.map(chunk => {
+  // Score candidate chunks (Hybrid Semantic + BM25)
+  const scoredChunks: DocumentChunk[] = candidateChunks.map(chunk => {
     let semanticScore = 0;
     if (queryEmbedding && chunk.embedding) {
       semanticScore = cosineSimilarity(queryEmbedding, chunk.embedding);
@@ -371,9 +503,9 @@ export async function retrieveRelevantChunks(
 
     const bm25Score = computeBM25Score(queryTokens, `${chunk.docTitle} ${chunk.text}`);
 
-    // Hybrid Score: If semantic embedding exists, weight 70% vector + 30% keyword; else 100% BM25
+    // If semantic embedding exists, 75% vector similarity + 25% keyword match
     const finalScore = queryEmbedding && chunk.embedding
-      ? semanticScore * 0.7 + bm25Score * 0.3
+      ? semanticScore * 0.75 + bm25Score * 0.25
       : bm25Score;
 
     return {
@@ -382,17 +514,50 @@ export async function retrieveRelevantChunks(
     };
   });
 
-  // 4. Sort by score descending
+  // Sort by score descending
   scoredChunks.sort((a, b) => (b.similarityScore || 0) - (a.similarityScore || 0));
 
-  // 5. Select top-K chunks respecting char budget
+  const topScore = scoredChunks[0]?.similarityScore || 0;
+
+  // Dynamic Top-K Decision (with minimum floor of 3 chunks):
+  // The old algorithm allowed 1 chunk at topScore >= 0.88, but a single high-scoring chunk
+  // can be a tiny heading/title fragment (198 chars) with no actual content.
+  // Fix: Always require at least minChunks (3) to guarantee surrounding context.
+  let dynamicK = options.topK || 5;
+  if (options.dynamicTopK !== false) {
+    if (topScore >= 0.88) {
+      dynamicK = Math.max(minChunks, 3);
+      console.log(`[Dynamic Top-K] High precision: topScore = ${topScore} >= 0.88 -> Selected top ${dynamicK} chunks (min ${minChunks} enforced)`);
+    } else if (topScore >= 0.80) {
+      dynamicK = Math.max(minChunks, 3);
+      console.log(`[Dynamic Top-K] High confidence: topScore = ${topScore} >= 0.80 -> Selected top ${dynamicK} chunks`);
+    } else if (topScore >= 0.65) {
+      dynamicK = Math.max(minChunks, 4);
+    } else {
+      dynamicK = Math.min(dynamicK, 5);
+    }
+  }
+
+  const cutoffThreshold = options.minSimilarity ?? 0.80;
   const selected: DocumentChunk[] = [];
   let accumulatedChars = 0;
 
   for (const chunk of scoredChunks) {
-    if (selected.length >= topK) break;
-    // Include if score passes threshold or if we have very few chunks
-    if ((chunk.similarityScore || 0) >= minSimilarity || selected.length < 2) {
+    if (selected.length >= dynamicK) break;
+    const score = chunk.similarityScore || 0;
+
+    // Strict Cutoff Rule:
+    // If topScore >= 0.80, only accept chunks that are also high confidence (>= 0.75 and within 15% of topScore)
+    // Otherwise, accept if score >= cutoffThreshold or pick the single best chunk if below
+    // Exception: if we haven't hit minChunks or minTotalChars yet, relax the cutoff
+    const needsMore = selected.length < minChunks || accumulatedChars < minTotalChars;
+    const passes = needsMore
+      ? score >= 0.25 // Relaxed threshold when we need more context
+      : topScore >= 0.80
+        ? score >= 0.75 && score >= topScore * 0.85
+        : score >= cutoffThreshold || (selected.length === 0 && score >= 0.25);
+
+    if (passes) {
       if (accumulatedChars + chunk.text.length <= maxTotalChars) {
         selected.push(chunk);
         accumulatedChars += chunk.text.length;
@@ -400,13 +565,47 @@ export async function retrieveRelevantChunks(
     }
   }
 
-  // If no chunks passed threshold (e.g. general questions), pick top chunks
+  // Surrounding Context: if top chunk is very high scoring but short (<300 chars),
+  // pull in adjacent chunks (chunkIndex ± 1) from the same document to include the
+  // content that follows a heading. This prevents the "Fragmented Chunk" problem.
+  if (selected.length > 0 && selected[0].text.length < 300 && candidateChunks.length > 1) {
+    const topChunk = selected[0];
+    const adjacentChunks = candidateChunks
+      .filter(c =>
+        c.docTitle === topChunk.docTitle &&
+        c.id !== topChunk.id &&
+        Math.abs(c.chunkIndex - topChunk.chunkIndex) <= 2 &&
+        !selected.some(s => s.id === c.id)
+      )
+      .sort((a, b) => a.chunkIndex - b.chunkIndex)
+      .slice(0, 3);
+
+    for (const adj of adjacentChunks) {
+      if (accumulatedChars + adj.text.length <= maxTotalChars) {
+        selected.push(adj);
+        accumulatedChars += adj.text.length;
+      }
+    }
+
+    // Re-sort by chunkIndex for natural reading order within same document
+    selected.sort((a, b) => {
+      if (a.docTitle !== b.docTitle) return 0;
+      return a.chunkIndex - b.chunkIndex;
+    });
+  }
+
+  // Safety fallback: if nothing qualified, take the top minChunks chunks
   if (selected.length === 0 && scoredChunks.length > 0) {
-    for (const chunk of scoredChunks.slice(0, Math.min(topK, 3))) {
-      selected.push(chunk);
+    const fallbackCount = Math.min(minChunks, scoredChunks.length);
+    for (let i = 0; i < fallbackCount; i++) {
+      selected.push(scoredChunks[i]);
+      accumulatedChars += scoredChunks[i].text.length;
     }
   }
 
+  console.log(
+    `[RAG Result] Query: "${cleanQuery.slice(0, 35)}..." -> Yielded ${selected.length} chunk(s) (topScore: ${topScore}, totalChars: ${accumulatedChars})`
+  );
   return selected;
 }
 
@@ -417,11 +616,10 @@ export function formatChunksForPrompt(chunks: DocumentChunk[]): string {
   if (!chunks || chunks.length === 0) return '';
 
   return chunks
+    .filter(chunk => chunk.text && chunk.text.trim().length > 20)
     .map(
       (chunk, idx) =>
-        `--- ĐOẠN TRÍCH [${idx + 1}] TỪ TÀI LIỆU: "${chunk.docTitle}" (Độ liên quan: ${Math.round(
-          (chunk.similarityScore || 0) * 100
-        )}%) ---\n${chunk.text}`
+        `[ĐOẠN TRÍCH TÀI LIỆU ${idx + 1}: "${chunk.docTitle}"]\n${chunk.text.trim()}`
     )
     .join('\n\n');
 }

@@ -1,8 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase';
-import { getFirebaseRows, setFirebaseRow } from '@/lib/firebase-admin';
-import { getDb } from '@/db';
-import { learningArtifacts, users } from '@/db/schema';
-import { eq, and, desc } from 'drizzle-orm';
+import { getFirebaseRows, getFirebaseRow, setFirebaseRow, deleteFirebaseRow } from '@/lib/firebase-admin';
 import type { QuizAnalysisData } from '@/app/types';
 
 export interface SaveArtifactParams {
@@ -15,10 +12,52 @@ export interface SaveArtifactParams {
 
 export async function saveLearningArtifact(params: SaveArtifactParams) {
   const { userId, userName, moodleCourseId, artifactType, contentData } = params;
+  const id = ((contentData as any)?.id && typeof (contentData as any).id === 'string' && (contentData as any).id.length > 10)
+    ? (contentData as any).id
+    : crypto.randomUUID();
 
+  let savedRecord: any = null;
+
+  // 1. Dual-Write to Supabase (so Supabase Studio reflects data in real-time)
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase.from('users').upsert(
+        {
+          moodle_user_id: userId,
+          role: userId === 2 ? 'teacher' : 'student',
+          name: userName || (userId === 2 ? 'Admin User' : 'Sinh viên'),
+        },
+        { onConflict: 'moodle_user_id', ignoreDuplicates: true }
+      );
+
+      const { data, error } = await supabase
+        .from('learning_artifacts')
+        .upsert({
+          id,
+          user_id: userId,
+          moodle_course_id: moodleCourseId,
+          artifact_type: artifactType,
+          content_data: contentData,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'id' })
+        .select()
+        .single();
+
+      if (!error && data) {
+        savedRecord = data;
+      } else if (error) {
+        // Table might not exist yet or connection issue
+        console.warn('Supabase saveLearningArtifact note:', error.message);
+      }
+    } catch (sbErr) {
+      console.warn('Supabase saveLearningArtifact exception:', sbErr);
+    }
+  }
+
+  // 2. Dual-Write to Firebase Firestore
   try {
-    const id = crypto.randomUUID();
-    const saved = await setFirebaseRow('learning_artifacts', id, {
+    const savedFirebase = await setFirebaseRow('learning_artifacts', id, {
       user_id: userId,
       moodle_course_id: moodleCourseId,
       artifact_type: artifactType,
@@ -26,83 +65,163 @@ export async function saveLearningArtifact(params: SaveArtifactParams) {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
-    if (saved) return saved;
+    if (!savedRecord && savedFirebase) {
+      savedRecord = savedFirebase;
+    }
   } catch (firebaseError) {
     console.warn('Firebase saveLearningArtifact warning:', firebaseError);
   }
 
-  // Legacy fallback for local environments without Firebase credentials.
+  return savedRecord || { id, user_id: userId, moodle_course_id: moodleCourseId, artifact_type: artifactType, content_data: contentData };
+}
+
+export interface UpdateArtifactParams {
+  name?: string;
+  orientation?: 'horizontal' | 'vertical';
+  contentData?: Record<string, unknown>;
+}
+
+export async function updateLearningArtifact(id: string, params: UpdateArtifactParams) {
+  const { name, orientation, contentData } = params;
+  let updatedRecord: any = null;
+
+  // 1. Dual-write to Firebase Firestore
+  try {
+    const existing = await getFirebaseRow('learning_artifacts', id);
+    let existingContent: Record<string, unknown> = {};
+    if (existing && existing.content_data && typeof existing.content_data === 'object') {
+      existingContent = { ...(existing.content_data as Record<string, unknown>) };
+    }
+
+    if (orientation) {
+      existingContent.orientation = orientation;
+      if (existingContent.data && typeof existingContent.data === 'object') {
+        (existingContent.data as Record<string, unknown>).orientation = orientation;
+      }
+    }
+    if (name) {
+      existingContent.name = name;
+    }
+    if (contentData && typeof contentData === 'object') {
+      existingContent = { ...existingContent, ...contentData };
+    }
+
+    const savedFirebase = await setFirebaseRow(
+      'learning_artifacts',
+      id,
+      {
+        content_data: existingContent,
+        updated_at: new Date().toISOString(),
+      },
+      ['content_data', 'updated_at']
+    );
+    if (savedFirebase) {
+      updatedRecord = savedFirebase;
+    }
+  } catch (firebaseError) {
+    console.warn('Firebase updateLearningArtifact warning:', firebaseError);
+  }
+
+  // 2. Dual-write to Supabase
   const supabase = getSupabaseAdmin();
   if (supabase) {
     try {
-      // Ensure user exists in users table due to foreign key
-      await supabase.from('users').upsert(
-        {
-          moodle_user_id: userId,
-          role: 'student',
-          name: userName || 'Sinh viên',
-        },
-        { onConflict: 'moodle_user_id' }
-      );
+      const { data: existingSb } = await supabase
+        .from('learning_artifacts')
+        .select('content_data')
+        .eq('id', id)
+        .maybeSingle();
+
+      let sbContent: Record<string, unknown> = (existingSb?.content_data as Record<string, unknown>) || {};
+      if (orientation) {
+        sbContent = {
+          ...sbContent,
+          orientation,
+          data: sbContent.data && typeof sbContent.data === 'object'
+            ? { ...(sbContent.data as Record<string, unknown>), orientation }
+            : sbContent.data,
+        };
+      }
+      if (name) {
+        sbContent = { ...sbContent, name };
+      }
+      if (contentData && typeof contentData === 'object') {
+        sbContent = { ...sbContent, ...contentData };
+      }
 
       const { data, error } = await supabase
         .from('learning_artifacts')
-        .insert({
-          user_id: userId,
-          moodle_course_id: moodleCourseId,
-          artifact_type: artifactType,
-          content_data: contentData,
+        .update({
+          content_data: sbContent,
+          updated_at: new Date().toISOString(),
         })
+        .eq('id', id)
         .select()
-        .single();
+        .maybeSingle();
 
       if (!error && data) {
-        return data;
-      }
-      if (error) {
-        console.warn('Supabase saveLearningArtifact warning:', error);
+        updatedRecord = updatedRecord || data;
       }
     } catch (sbErr) {
-      console.warn('Supabase saveLearningArtifact exception:', sbErr);
+      console.warn('Supabase updateLearningArtifact note:', sbErr);
     }
   }
 
-  // 2. Fallback to Drizzle getDb() if available
-  const db = getDb();
-  if (db) {
+  return updatedRecord || { id, orientation, name };
+}
+
+export async function deleteLearningArtifact(params: { id?: string; attemptId?: number; userId?: number; artifactType?: string }) {
+  const { id, attemptId, userId, artifactType } = params;
+  let deletedCount = 0;
+
+  // 1. Delete from Supabase
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
     try {
-      // Ensure user exists
-      const existing = await db
-        .select()
-        .from(users)
-        .where(eq(users.moodleUserId, userId))
-        .limit(1);
-
-      if (existing.length === 0) {
-        await db.insert(users).values({
-          moodleUserId: userId,
-          role: 'student',
-          name: userName || 'Sinh viên',
-        });
+      if (id) {
+        let query = supabase.from('learning_artifacts').delete().eq('id', id);
+        if (userId) query = query.eq('user_id', userId);
+        if (artifactType) query = query.eq('artifact_type', artifactType);
+        const { error } = await query;
+        if (!error) deletedCount++;
+      } else if (attemptId) {
+        // Find matching artifact by attemptId in JSONB
+        let query = supabase.from('learning_artifacts').delete().contains('content_data', { attemptId });
+        if (userId) query = query.eq('user_id', userId);
+        const { error } = await query;
+        if (!error) deletedCount++;
       }
-
-      const [inserted] = await db
-        .insert(learningArtifacts)
-        .values({
-          userId,
-          moodleCourseId,
-          artifactType,
-          contentData: contentData as unknown as Record<string, unknown>,
-        })
-        .returning();
-
-      return inserted;
-    } catch (dbErr) {
-      console.warn('Drizzle saveLearningArtifact exception:', dbErr);
+    } catch (sbErr) {
+      console.warn('Supabase deleteLearningArtifact note:', sbErr);
     }
   }
 
-  return null;
+  // 2. Delete from Firebase
+  try {
+    if (id) {
+      const deleted = await deleteFirebaseRow('learning_artifacts', id);
+      if (deleted) deletedCount++;
+    } else if (attemptId) {
+      // Find rows in Firestore and delete
+      const rows = await getFirebaseRows('learning_artifacts', {
+        user_id: userId,
+        artifact_type: artifactType || 'quiz_analysis',
+      });
+      if (rows && rows.length > 0) {
+        for (const row of rows) {
+          const c = row.content_data as any;
+          if (c && Number(c.attemptId) === Number(attemptId)) {
+            await deleteFirebaseRow('learning_artifacts', row.id);
+            deletedCount++;
+          }
+        }
+      }
+    }
+  } catch (firebaseError) {
+    console.warn('Firebase deleteLearningArtifact note:', firebaseError);
+  }
+
+  return deletedCount > 0;
 }
 
 export async function getLearningArtifacts(params: {
@@ -113,18 +232,19 @@ export async function getLearningArtifacts(params: {
 }) {
   const { userId, moodleCourseId, artifactType, limit = 10 } = params;
 
+  // 1. Primary: Firebase Firestore (learning_artifacts collection)
   try {
     const rows = await getFirebaseRows('learning_artifacts', {
       user_id: userId,
       moodle_course_id: moodleCourseId,
       artifact_type: artifactType,
     }, limit);
-    if (rows) return rows;
+    if (rows && rows.length > 0) return rows;
   } catch (firebaseError) {
     console.warn('Firebase getLearningArtifacts warning:', firebaseError);
   }
 
-  // Legacy fallback for local environments without Firebase credentials.
+  // 2. Secondary: Supabase (if table exists)
   const supabase = getSupabaseAdmin();
   if (supabase) {
     try {
@@ -134,39 +254,14 @@ export async function getLearningArtifacts(params: {
       if (artifactType) query = query.eq('artifact_type', artifactType);
 
       const { data, error } = await query
-        .order('id', { ascending: false })
+        .order('created_at', { ascending: false })
         .limit(limit);
 
-      if (!error && data) {
+      if (!error && data && data.length > 0) {
         return data;
       }
-      if (error) {
-        console.warn('Supabase getLearningArtifacts warning:', error);
-      }
-    } catch (sbErr) {
-      console.warn('Supabase getLearningArtifacts exception:', sbErr);
-    }
-  }
-
-  // 2. Fallback to Drizzle
-  const db = getDb();
-  if (db) {
-    try {
-      const conditions = [];
-      if (userId) conditions.push(eq(learningArtifacts.userId, userId));
-      if (moodleCourseId) conditions.push(eq(learningArtifacts.moodleCourseId, moodleCourseId));
-      if (artifactType) conditions.push(eq(learningArtifacts.artifactType, artifactType));
-
-      const query = db
-        .select()
-        .from(learningArtifacts)
-        .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .orderBy(desc(learningArtifacts.id))
-        .limit(limit);
-
-      return await query;
-    } catch (dbErr) {
-      console.warn('Drizzle getLearningArtifacts exception:', dbErr);
+    } catch {
+      // Table may not exist in Supabase
     }
   }
 

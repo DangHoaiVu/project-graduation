@@ -17,6 +17,7 @@ import {
   RotateCcw,
   ChevronDown,
   MessageSquare,
+  Square,
 } from 'lucide-react';
 import type { QuizAnalysisData } from '@/app/types';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
@@ -27,7 +28,11 @@ interface QuizAnalysisModalProps {
   onClose: () => void;
   analysis: QuizAnalysisData | null;
   loading?: boolean;
+  loadingStage?: 'fetching_saved' | 'ai_diagnosing';
+  examName?: string;
+  courseName?: string;
   error?: string | null;
+  onStop?: () => void;
   onRetry?: () => void;
   onReanalyze?: () => void;
   onDelete?: () => Promise<void>;
@@ -40,7 +45,11 @@ export function QuizAnalysisModal({
   onClose,
   analysis,
   loading = false,
+  loadingStage = 'fetching_saved',
+  examName,
+  courseName,
   error = null,
+  onStop,
   onRetry,
   onReanalyze,
   onDelete,
@@ -63,14 +72,20 @@ export function QuizAnalysisModal({
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !loading) onClose();
+      if (e.key === 'Escape') {
+        if (loading && onStop) {
+          onStop();
+        } else {
+          onClose();
+        }
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       document.body.style.overflow = originalOverflow;
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, loading, onClose]);
+  }, [isOpen, loading, onClose, onStop]);
 
   if (!isOpen || !mounted) return null;
 
@@ -91,7 +106,13 @@ export function QuizAnalysisModal({
         overscrollBehavior: 'contain',
       }}
       onClick={e => {
-        if (e.target === e.currentTarget && !loading) onClose();
+        if (e.target === e.currentTarget) {
+          if (loading && onStop) {
+            onStop();
+          } else {
+            onClose();
+          }
+        }
       }}
     >
       <div
@@ -101,8 +122,8 @@ export function QuizAnalysisModal({
           border: '1px solid rgba(124, 109, 242, 0.35)',
           borderRadius: '18px',
           width: '100%',
-          maxWidth: '720px',
-          maxHeight: '80vh',
+          maxWidth: '860px',
+          maxHeight: '82vh',
           display: 'flex',
           flexDirection: 'column',
           boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.85), 0 0 35px rgba(124, 109, 242, 0.2)',
@@ -165,14 +186,20 @@ export function QuizAnalysisModal({
                 )}
               </div>
               <p style={{ margin: '2px 0 0', fontSize: '12.5px', color: '#94a3b8' }}>
-                {analysis?.quizName || 'Kiểm tra trắc nghiệm'} • {analysis?.courseName || 'Moodle LMS'}
+                {examName || analysis?.quizName || 'Kiểm tra trắc nghiệm'} • {courseName || analysis?.courseName || 'Moodle LMS'}
               </p>
             </div>
           </div>
 
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => {
+              if (loading && onStop) {
+                onStop();
+              } else {
+                onClose();
+              }
+            }}
             style={{
               background: 'rgba(255, 255, 255, 0.06)',
               border: '1px solid rgba(255, 255, 255, 0.1)',
@@ -186,7 +213,7 @@ export function QuizAnalysisModal({
               cursor: 'pointer',
               transition: 'all 0.15s',
             }}
-            title="Đóng"
+            title={loading ? 'Dừng và đóng' : 'Đóng'}
           >
             <X size={16} />
           </button>
@@ -232,15 +259,48 @@ export function QuizAnalysisModal({
                 <Sparkles size={22} color="#c084fc" />
               </div>
               <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 600 }}>
-                Đang chẩn đoán kết quả bài thi từ Moodle…
+                {loadingStage === 'fetching_saved'
+                  ? 'Đang nạp dữ liệu phân tích đã lưu…'
+                  : 'Đang chẩn đoán kết quả bài thi cùng AI…'}
               </h4>
               <p style={{ margin: 0, fontSize: '12.5px', color: '#94a3b8', maxWidth: '400px', lineHeight: 1.45 }}>
-                AI đang quét các câu sai, đối chiếu với tài liệu giáo trình và nhận diện các điểm mù tư duy của bạn.
+                {loadingStage === 'fetching_saved'
+                  ? 'Hệ thống đang kiểm tra bộ nhớ đệm và nạp dữ liệu phân tích đã lưu trước đó.'
+                  : 'AI đang bóc tách từng câu hỏi, đối chiếu giáo trình và nhận diện các điểm mù tư duy của bạn.'}
               </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onStop) {
+                    onStop();
+                  } else {
+                    onClose();
+                  }
+                }}
+                style={{
+                  marginTop: '0.65rem',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '7px',
+                  padding: '0.5rem 1.15rem',
+                  borderRadius: '20px',
+                  background: 'rgba(239, 68, 68, 0.12)',
+                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                  color: '#fca5a5',
+                  fontSize: '12.5px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+                title="Dừng khẩn cấp quá trình chẩn đoán AI"
+              >
+                <Square size={11} fill="currentColor" />
+                <span>Dừng chẩn đoán</span>
+              </button>
             </div>
           )}
 
-          {!loading && error && (
+          {!loading && error && !analysis && (
             <div
               style={{
                 padding: '2rem 1.5rem',
@@ -272,25 +332,45 @@ export function QuizAnalysisModal({
             </div>
           )}
 
-          {!loading && !error && analysis && (
+          {!loading && analysis && (
             <>
+              {error && (
+                <div
+                  style={{
+                    padding: '0.65rem 1rem',
+                    borderRadius: '10px',
+                    background: 'rgba(239, 68, 68, 0.12)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    color: '#fca5a5',
+                    fontSize: '12.5px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                  }}
+                >
+                  <AlertTriangle size={15} color="#f87171" />
+                  <span>{error}</span>
+                </div>
+              )}
               {/* Score & Key Stats Row */}
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(135px, 1fr))',
-                  gap: '9px',
+                  gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                  gap: '10px',
                 }}
               >
                 <div
                   style={{
-                    padding: '0.65rem 0.85rem',
+                    padding: '0.75rem 0.95rem',
                     borderRadius: '12px',
                     background: 'rgba(255, 255, 255, 0.03)',
                     border: '1px solid rgba(255, 255, 255, 0.08)',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '9px',
+                    gap: '10px',
+                    minHeight: '66px',
+                    boxSizing: 'border-box',
                   }}
                 >
                   <div
@@ -310,11 +390,11 @@ export function QuizAnalysisModal({
                   >
                     {formatGrade(analysis.score)}
                   </div>
-                  <div>
-                    <div style={{ fontSize: '10.5px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       Điểm Moodle
                     </div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#f3f2f8' }}>
+                    <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#f3f2f8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {formatGrade(analysis.score)} / {formatGrade(analysis.maxScore)}
                     </div>
                   </div>
@@ -322,13 +402,15 @@ export function QuizAnalysisModal({
 
                 <div
                   style={{
-                    padding: '0.65rem 0.85rem',
+                    padding: '0.75rem 0.95rem',
                     borderRadius: '12px',
                     background: 'rgba(255, 255, 255, 0.03)',
                     border: '1px solid rgba(255, 255, 255, 0.08)',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '9px',
+                    gap: '10px',
+                    minHeight: '66px',
+                    boxSizing: 'border-box',
                   }}
                 >
                   <div
@@ -346,11 +428,11 @@ export function QuizAnalysisModal({
                   >
                     <XCircle size={18} />
                   </div>
-                  <div>
-                    <div style={{ fontSize: '10.5px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       Sai hoàn toàn
                     </div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#f87171' }}>
+                    <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#f87171', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {analysis.wrongCount} / {analysis.totalQuestions} câu
                     </div>
                   </div>
@@ -358,13 +440,15 @@ export function QuizAnalysisModal({
 
                 <div
                   style={{
-                    padding: '0.65rem 0.85rem',
+                    padding: '0.75rem 0.95rem',
                     borderRadius: '12px',
                     background: 'rgba(255, 255, 255, 0.03)',
                     border: '1px solid rgba(255, 255, 255, 0.08)',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '9px',
+                    gap: '10px',
+                    minHeight: '66px',
+                    boxSizing: 'border-box',
                   }}
                 >
                   <div
@@ -382,11 +466,11 @@ export function QuizAnalysisModal({
                   >
                     <AlertTriangle size={18} />
                   </div>
-                  <div>
-                    <div style={{ fontSize: '10.5px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       Đúng một phần
                     </div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#fbbf24' }}>
+                    <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#fbbf24', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {analysis.partialCount} câu
                     </div>
                   </div>
@@ -394,13 +478,15 @@ export function QuizAnalysisModal({
 
                 <div
                   style={{
-                    padding: '0.65rem 0.85rem',
+                    padding: '0.75rem 0.95rem',
                     borderRadius: '12px',
                     background: 'rgba(255, 255, 255, 0.03)',
                     border: '1px solid rgba(255, 255, 255, 0.08)',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '9px',
+                    gap: '10px',
+                    minHeight: '66px',
+                    boxSizing: 'border-box',
                   }}
                 >
                   <div
@@ -418,11 +504,11 @@ export function QuizAnalysisModal({
                   >
                     <Target size={18} />
                   </div>
-                  <div>
-                    <div style={{ fontSize: '10.5px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       Lỗ hổng phát hiện
                     </div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#c084fc' }}>
+                    <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#c084fc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {(analysis.weakTopics || []).length} chủ đề cốt lõi
                     </div>
                   </div>
@@ -616,8 +702,32 @@ export function QuizAnalysisModal({
                             </div>
                           </div>
 
+                          {/* Official Explanation from Quiz / Moodle */}
+                          {(q.explanation || q.feedback) && (
+                            <div
+                              style={{
+                                padding: '7px 11px',
+                                borderRadius: '8px',
+                                background: 'rgba(56, 189, 248, 0.08)',
+                                border: '1px solid rgba(56, 189, 248, 0.22)',
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: '7px',
+                                fontSize: '12px',
+                                color: '#e0f2fe',
+                                lineHeight: 1.45,
+                              }}
+                            >
+                              <BookOpen size={14} color="#38bdf8" style={{ flexShrink: 0, marginTop: '2px' }} />
+                              <div>
+                                <strong style={{ color: '#38bdf8' }}>Lời giải từ đề thi: </strong>
+                                <span>{q.explanation || q.feedback}</span>
+                              </div>
+                            </div>
+                          )}
+
                           {/* Diagnosed reason */}
-                          {q.diagnosedReason && (
+                          {q.diagnosedReason && q.diagnosedReason !== (q.explanation || q.feedback) && (
                             <div
                               style={{
                                 padding: '7px 11px',
@@ -694,7 +804,7 @@ export function QuizAnalysisModal({
                 title="Tạo lại bản phân tích mới bằng AI (tốn AI token)"
               >
                 <RotateCcw size={13} />
-                <span>Chẩn đoán lại với AI</span>
+                <span>Chẩn đoán lại</span>
               </button>
             )}
             {analysis && analysis.id && onDelete && (
@@ -751,7 +861,7 @@ export function QuizAnalysisModal({
               title="Chọn phương pháp cải thiện điểm số và khắc phục lỗ hổng kiến thức"
             >
               <Sparkles size={15} />
-              <span>Cải thiện điểm số cùng AI</span>
+              <span>Cải thiện điểm số</span>
               <ChevronDown
                 size={15}
                 style={{
@@ -834,7 +944,7 @@ export function QuizAnalysisModal({
                     </div>
                     <div>
                       <strong style={{ display: 'block', fontSize: '12.5px', color: '#f8fafc', fontWeight: 700 }}>
-                        Trao đổi với Gia sư AI
+                        Trao đổi với AI
                       </strong>
                       <small style={{ fontSize: '11px', color: '#94a3b8', lineHeight: 1.35, display: 'block', marginTop: '2px' }}>
                         Phân tích sâu từng câu sai, bóc tách bản chất lý thuyết & vạch lộ trình

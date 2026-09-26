@@ -9,7 +9,7 @@ let client: postgres.Sql | null = null;
 let dbInstance: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
 function initClient(): ReturnType<typeof drizzle<typeof schema>> | null {
-  if (!connectionString) return null;
+  if (!connectionString || connectionString.includes('[YOUR-PASSWORD]') || connectionString.includes('your-password')) return null;
   if (!client || !dbInstance) {
     try {
       // Tắt prepare để tương thích tốt hơn với môi trường serverless/pgbouncer
