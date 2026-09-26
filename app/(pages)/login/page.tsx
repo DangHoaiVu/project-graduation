@@ -22,7 +22,18 @@ export default function LoginPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
-      const data = (await response.json()) as { error?: string; moodleToken?: string; user?: { id?: number } };
+      const rawText = await response.text();
+      let data: { error?: string; moodleToken?: string; user?: { id?: number } } = {};
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        throw new Error(
+          response.ok
+            ? 'Phản hồi từ máy chủ không hợp lệ.'
+            : `Máy chủ đang khởi động hoặc gặp sự cố (${response.status}). Vui lòng thử lại.`
+        );
+      }
+
       if (!response.ok || !data.moodleToken || !data.user) {
         throw new Error(data.error ?? 'Không thể đăng nhập.');
       }
